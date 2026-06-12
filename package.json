@@ -9,8 +9,12 @@
     "build": "plasmo build",
     "package": "plasmo package",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "typecheck": "tsc --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
   },
+  "packageManager": "pnpm@11.3.0",
   "dependencies": {
     "plasmo": "0.90.5",
     "react": "18.2.0",
