@@ -17,7 +17,7 @@ results).
 
 This feature adds a **generic gesture**: arm the extension, drag a box over a
 region, and every link inside that box opens as one named Chrome tab group.
-GitHub issue/PR context only *enriches naming* — it is not a precondition.
+GitHub issue/PR context only _enriches naming_ — it is not a precondition.
 
 ## Flow
 
@@ -37,9 +37,11 @@ flowchart LR
 ## Requirements
 
 **Prerequisite**
+
 - R0. Add `"tabs"` and `"tabGroups"` to the `manifest` permissions override in `package.json` before any tabs/groups API call can function (the current scaffold has only `host_permissions: ["https://*/*"]`).
 
 **Activation & Selection**
+
 - R1. The extension exposes a single toolbar (action) button. Clicking it arms
   "box-select mode": the cursor becomes a crosshair and the active page enters a
   selection state. The button reflects its state — a distinct armed indicator
@@ -57,6 +59,7 @@ flowchart LR
   the newly-focused tab.
 
 **Link Capture & Highlighting**
+
 - R4. While dragging, capture every `<a>` whose bounding rectangle **intersects
   (touches)** the selection rectangle. Capture recomputes live as the box
   grows/shrinks. Capture is **viewport-bound**: only links currently rendered in
@@ -75,6 +78,7 @@ flowchart LR
   single selection**.
 
 **Confirmation**
+
 - R7. On mouse-up, show a small confirmation popup anchored **contextually next
   to the selection box** (not a centered modal). Placement collision-resolves
   against the viewport: prefer right of the box, flip to left, then below, and
@@ -89,6 +93,7 @@ flowchart LR
   proceeds; dismissing cancels with no tabs opened.
 
 **Tab Group Creation & Naming**
+
 - R9. On confirm, open each selected link as a **new background tab** in the
   current window. Always open fresh tabs (no reuse/dedupe against already-open
   tabs). The background worker **awaits all `chrome.tabs.create` calls and
@@ -105,6 +110,7 @@ flowchart LR
 - R12. Tabs keep their **native page titles** in v1 (no per-tab renaming).
 
 ## Success Criteria
+
 - On a GitHub issue listing N PR links (e.g. #409), one box-select gesture opens
   all N PRs as background tabs inside one named tab group — zero manual tab/group
   management.
@@ -117,6 +123,7 @@ flowchart LR
   returning to its normal state (overlay, box, and highlight rings all removed).
 
 ## Scope Boundaries
+
 - **Not GitHub-only.** Works on any page; GitHub issue/PR context only enriches
   the group name.
 - **No per-tab renaming** to `[repo #N] title` in v1 (deferred — carries the cost
@@ -127,6 +134,7 @@ flowchart LR
 - **Chromium target only** — `chrome.tabGroups` is unsupported on Firefox.
 
 ## Key Decisions
+
 - **Plasmo is a confirmed fit** (verified against Plasmo docs): a content script
   owns the overlay, box-draw, live highlight, and confirm popup; the background
   service worker owns the `chrome.tabs` / `chrome.tabGroups` calls; they talk via
@@ -143,6 +151,7 @@ flowchart LR
   popup surface can be reintroduced later if settings are needed.
 
 ## Dependencies / Assumptions
+
 - Manifest needs `"tabs"` and `"tabGroups"` added to the `manifest` override in
   `package.json` (currently only `host_permissions: ["https://*/*"]` — verified
   against the current scaffold). See R0.
@@ -152,7 +161,7 @@ flowchart LR
   relies on.
 - `chrome.tabGroups` requires MV3 (Plasmo default) and is Chromium-only.
 - `prTitle` is **not** present in a PR URL (only `repoName` and `prNumber` are).
-  Group naming uses the *source page's* GitHub context (repo + issue from the
+  Group naming uses the _source page's_ GitHub context (repo + issue from the
   URL), so v1 naming needs **no** async PR-title fetch.
 - The user is authenticated to GitHub in the browser, so opened private-repo PR
   tabs load normally — we only open tabs, no GitHub API auth needed.
@@ -160,9 +169,11 @@ flowchart LR
 ## Outstanding Questions
 
 ### Resolve Before Planning
+
 - (none — all product decisions resolved)
 
 ### Deferred to Planning
+
 - [Affects R3][Technical] Exact cancel gesture (`Esc` / re-click toolbar / click
   outside).
 - [Affects R4][Technical] Whether to support autoscroll / multi-screen selection
@@ -183,4 +194,5 @@ flowchart LR
   scope for v1; confirm during planning.
 
 ## Next Steps
+
 -> `/ce-plan` for structured implementation planning

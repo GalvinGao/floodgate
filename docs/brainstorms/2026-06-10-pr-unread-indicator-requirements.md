@@ -9,11 +9,11 @@ builds-on: docs/brainstorms/2026-06-09-pr-status-favicon-requirements.md
 ## Problem Frame
 
 The PR status favicon (the `2026-06-09-pr-status-favicon` feature) already tells
-you each PR's *current* review/check state at a glance. But when you box-select a
+you each PR's _current_ review/check state at a glance. But when you box-select a
 stack of PRs into a group and walk away, the color alone can't tell you **which
 ones changed since you last looked**. A favicon that turned green an hour ago and
 one that turned green ten seconds ago look identical. Across a 10-PR stack you
-re-scan every icon and still can't tell what's *new*.
+re-scan every icon and still can't tell what's _new_.
 
 This feature adds an **unread indicator** — a dot in the **top-right corner of the
 favicon** — that lights up when a PR's favicon changes while you aren't looking at
@@ -26,13 +26,13 @@ It is **multi-surface**: the same unread state also drives the Options page's
 
 ## Core Model (resolved in brainstorm)
 
-| Decision | Resolution |
-|----------|------------|
-| **When does the dot light?** | A PR tab's favicon **visibly changes** (review color, check color, the "+", or a lifecycle flip) **while the tab is not visible**. |
-| **What's the baseline?** | The favicon as of the **last time the tab was visible**. Set silently on first load — a freshly opened background tab shows **no dot** until it *changes*. |
-| **Flap behavior** | **Latched.** Once any change occurs while hidden, the dot stays lit until you refocus — even if the favicon flaps back to the baseline. The dot means "*something happened while you were away*," not "*looks different right now*." |
-| **What clears it?** | **Refocusing the tab** (it becomes visible). Clearing also re-baselines to the current state. |
-| **Where is it shown?** | Favicon top-right corner **and** the Options "Currently monitoring" list. |
+| Decision                     | Resolution                                                                                                                                                                                                                           |
+| ---------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| **When does the dot light?** | A PR tab's favicon **visibly changes** (review color, check color, the "+", or a lifecycle flip) **while the tab is not visible**.                                                                                                   |
+| **What's the baseline?**     | The favicon as of the **last time the tab was visible**. Set silently on first load — a freshly opened background tab shows **no dot** until it _changes_.                                                                           |
+| **Flap behavior**            | **Latched.** Once any change occurs while hidden, the dot stays lit until you refocus — even if the favicon flaps back to the baseline. The dot means "_something happened while you were away_," not "_looks different right now_." |
+| **What clears it?**          | **Refocusing the tab** (it becomes visible). Clearing also re-baselines to the current state.                                                                                                                                        |
+| **Where is it shown?**       | Favicon top-right corner **and** the Options "Currently monitoring" list.                                                                                                                                                            |
 
 ## Requirements
 
@@ -41,6 +41,7 @@ Requirements use the **U-prefix** to stay unambiguous from the favicon doc's
 that system; it does not replace any `R#`.
 
 **Visibility tracking**
+
 - **U1.** The **content script is the source of truth for visibility.** It uses the
   Page Visibility API (`document.visibilityState` / `visibilitychange`) — which is
   exactly "this tab is the foreground tab of a non-minimized window" — and reports
@@ -57,6 +58,7 @@ that system; it does not replace any `R#`.
   devtools / omnibox / alt-tab. (See Deferred.)
 
 **Unread state (background-owned)**
+
 - **U2.** Each registry entry gains: `seenStatus` (the `PrStatus` the user last saw —
   the baseline), `visible` (last-reported visibility), and `unread` (the latch flag).
   These live in the existing `chrome.storage.session` registry, so unread state
@@ -73,23 +75,24 @@ that system; it does not replace any `R#`.
     `seenStatus` is left unchanged.
 - **U4a.** "Differs" is measured on the **rendered favicon** — i.e. `toFaviconSpec`
   equality, not raw `PrStatus` field equality. If two statuses produce the same icon
-  (no visible change), the dot does **not** light (resolved: "any *visible* favicon
+  (no visible change), the dot does **not** light (resolved: "any _visible_ favicon
   change"). **`FaviconSpec` has optional fields (`plus?`, `whole?`), so a naive `===`
   / `JSON.stringify` comparison is unreliable** — define a canonical
   `faviconSpecEqual(a, b)`: when `a.whole` (or `b.whole`) is true, compare only
   `whole` + `left`; otherwise compare `left`, `right`, and `!!a.plus === !!b.plus`
   (normalize `undefined`→`false`). This comparator is the **single source of
   "differs"** and should be a unit-tested pure function in `lib/pr-status.ts`. Note
-  the latch catches the *intermediate* state of a flap (a failing check renders red,
+  the latch catches the _intermediate_ state of a flap (a failing check renders red,
   which differs from the baseline), which is why "failed then recovered" still lights
   the dot even though the endpoints render identically.
 - **U5.** **On visibility → `visible`:** set `unread = false` and `seenStatus =
-  currentStatus` (clear + re-baseline), and push a redraw so the dot disappears.
+currentStatus` (clear + re-baseline), and push a redraw so the dot disappears.
 - **U6.** **On visibility → `hidden`:** set `seenStatus = currentStatus`,
   `unread = false` (re-baseline at the moment of blur; nothing is unread yet). Only
-  changes *after* this point can latch the dot.
+  changes _after_ this point can latch the dot.
 
 **Rendering**
+
 - **U7.** `drawFavicon` (canvas) and `faviconSvg` (Options legend/list) both render a
   small **top-right corner dot** when unread — drawn from the **shared `geometry()`**
   so canvas and SVG never drift (same discipline as the existing split + "+"). **Pass
@@ -110,9 +113,9 @@ that system; it does not replace any `R#`.
   top-right quadrant budget at 16px means the geometry must be prototyped at both 16px
   and 32px before the size/ring is finalized.
 - **U7b.** The background pushes `unread` alongside status (`{ type: "prStatus",
-  status, unread }`), and pushes a redraw when `unread` flips on a visibility change.
+status, unread }`), and pushes a redraw when `unread` flips on a visibility change.
   **The background is the single authoritative owner of `unread`.** The content script
-  *may* clear its own dot **optimistically and instantly** on the `visible` transition
+  _may_ clear its own dot **optimistically and instantly** on the `visible` transition
   to avoid round-trip lag, but this is **best-effort, idempotent**: the background's
   subsequent U5 push is authoritative, and if the optimistic clear is ever lost the
   next push reconciles it. The content script must **not** maintain its own latch state
@@ -120,6 +123,7 @@ that system; it does not replace any `R#`.
   shortcut on top of it.
 
 **Options page (second surface)**
+
 - **U8.** The "Currently monitoring" list surfaces unread: a PR row is **unread if any
   of its tabs** is unread (OR across the coalesced tabs). This requires extending
   `RegistryEntry` (`lib/registry.ts`) with the `unread` flag (per U2) **and**
@@ -134,6 +138,7 @@ that system; it does not replace any `R#`.
   Resolve-Before-Planning for the error+unread composition).
 
 **Polling & entry lifecycle (extends favicon R8/R8a) — resolves the two P0 blockers**
+
 - **U9.** **Polling must continue past "settled" so post-settle changes still latch.**
   Today `isSettled` (approved+passing, **or** merged/closed) stops the poll alarm. Redefine
   the stop condition: **only lifecycle-terminal PRs (merged/closed) stop polling.** Open PRs
@@ -159,6 +164,7 @@ that system; it does not replace any `R#`.
   read" button is Deferred).
 
 ## Success Criteria
+
 - Box a 10-PR stack, walk away, come back: dots appear on **exactly** the PRs whose
   favicons changed while you were away — none on the rest.
 - A freshly boxed stack shows **zero** dots until something actually changes.
@@ -171,19 +177,21 @@ that system; it does not replace any `R#`.
 - No regression to the favicon, box-select, or token flows.
 
 ## Scope Boundaries
+
 - **Not a notification system** — no OS notifications, no sound, no popups. Purely a
   passive visual marker on surfaces you already look at (tab strip + Options).
 - **No directional/severity styling** — one dot style for any visible change; the dot
   doesn't encode "got better" vs "got worse" (the half-colors already do).
 - **Page Visibility only** (U1b) — app/window-level blur while the tab stays
   foreground does not count as "away" in v1.
-- **Favicon + Options list only** — *not* an aggregate count on the toolbar action
+- **Favicon + Options list only** — _not_ an aggregate count on the toolbar action
   icon in v1 (see Deferred — there's a real conflict with the per-tab `ON` / `!`
   badges).
 - Inherits all favicon scope boundaries (github.com only, single token, requires a
   loaded document, etc.).
 
 ## Key Decisions
+
 - **Content script reports visibility; background owns the latch** — the page knows
   its own visibility natively (Page Visibility API), so we avoid reconstructing
   multi-window focus in the background while still centralizing unread state for the
@@ -208,6 +216,7 @@ that system; it does not replace any `R#`.
   and avoids an extra API round-trip on the failure path.
 
 ## Dependencies / Assumptions
+
 - **Builds on the PR status favicon feature** — reuses the background registry +
   central `chrome.alarms` poll (`background/index.ts`), the content script
   (`contents/github-pr-favicon.ts`), the favicon renderers (`lib/favicon.ts`), the
@@ -223,8 +232,9 @@ that system; it does not replace any `R#`.
 ## Outstanding Questions
 
 ### Resolve Before Planning
-*(surfaced by the 2026-06-11 document review — these change behavior or are load-bearing
-correctness gaps, so resolve them before `/ce-plan` rather than discovering them mid-build.)*
+
+_(surfaced by the 2026-06-11 document review — these change behavior or are load-bearing
+correctness gaps, so resolve them before `/ce-plan` rather than discovering them mid-build.)_
 
 > **Resolved 2026-06-11** (the two P0 blockers): poll continuation → **U9**; registry-entry
 > lifecycle / no prune-on-push → **U10**. See those requirements and Key Decisions.
@@ -232,7 +242,7 @@ correctness gaps, so resolve them before `/ce-plan` rather than discovering them
 - **[P1] Page-Visibility-only vs the "walk away" promise.** If the PR tab stays the
   foreground tab while you alt-tab to another app, `visibilityState` stays `visible` → **no
   dot lights** — yet "walk away" is the headline use case. **Decide:** re-scope the
-  problem-frame/success-criteria to "changed while this tab was *backgrounded*," or pull the
+  problem-frame/success-criteria to "changed while this tab was _backgrounded_," or pull the
   v2 `document.hasFocus()`/window-blur signal into v1 for the single-PR-window workflow.
 - **[P1] Multi-tab (1 PR open in N tabs) latch — per-tab or per-PR?** U4 latches per-tab; U8
   ORs per-PR. Focusing one tab clears its dot but the Options row stays unread (another
@@ -245,7 +255,7 @@ correctness gaps, so resolve them before `/ce-plan` rather than discovering them
   (e.g. a monotonic visibility sequence/timestamp on each message + entry; U4 evaluates
   against the latest only) and define handling of a `visibility` message for a tab not yet
   in the registry (buffer vs drop).
-- **[P1] Lifecycle "whole" icons + the dot.** Does a merge/close *while away* show a dot
+- **[P1] Lifecycle "whole" icons + the dot.** Does a merge/close _while away_ show a dot
   (it can imply "actionable" on a done PR)? If yes, the canvas `whole` early-return must
   draw the dot too (per U7). **Decide** whether lifecycle-final states suppress or show it.
 - **[P1] Never-viewed boxed tab — confirm the contract.** U3 baselines on first fetch
@@ -262,6 +272,7 @@ correctness gaps, so resolve them before `/ce-plan` rather than discovering them
   near-free timestamp option, or note why the dot is worth it.
 
 **Advisory (FYI — no decision required, but worth a look):**
+
 - Consider **dropping U6** (re-baseline on `hidden`): U3 (baseline on first load) + U5
   (re-baseline on `visible`) already cover it, and dropping U6 removes a hide-window race.
 - Latched dots that never auto-clear risk a **stale/noisy stack** across a long-lived group
@@ -274,12 +285,13 @@ correctness gaps, so resolve them before `/ce-plan` rather than discovering them
   undefined — specify in planning whether an error→recovery while hidden latches.
 
 ### Deferred to Planning / v2
+
 - **[v2] Aggregate toolbar-icon badge** — a global "N PRs with updates" count was
   considered and **declined for v1**: the action badge is already per-tab-overloaded
   (`ON` for box-select, `!` for token errors), and a global count showing on
   unrelated tabs is semantically muddy. Revisit only with a clear badge-precedence
   design.
-- **[v2] Survive tab *discard*** — unread survives SW eviction (U2) but **not** a
+- **[v2] Survive tab _discard_** — unread survives SW eviction (U2) but **not** a
   Chrome tab-discard: a discarded tab's content script dies, the entry is pruned on
   the next failed push (current behavior), and it re-baselines on restore. Keeping
   unread across discard needs distinguishing discard-vs-close (`chrome.tabs.get`) —
@@ -296,4 +308,5 @@ correctness gaps, so resolve them before `/ce-plan` rather than discovering them
   the desired behavior).
 
 ## Next Steps
+
 -> `/ce-plan` for structured implementation planning

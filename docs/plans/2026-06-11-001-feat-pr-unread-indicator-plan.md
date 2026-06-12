@@ -11,11 +11,11 @@ origin: docs/brainstorms/2026-06-10-pr-unread-indicator-requirements.md
 ## Overview
 
 Add an **unread indicator** to the existing PR status favicon: a dot in the favicon's
-top-right corner that lights when a PR tab's favicon *visibly changes while the tab is
-backgrounded*, and clears when you bring the tab back to the foreground. The same unread
+top-right corner that lights when a PR tab's favicon _visibly changes while the tab is
+backgrounded_, and clears when you bring the tab back to the foreground. The same unread
 state surfaces on the Options "Currently monitoring" list. The point: across a box-selected
-stack of PR tabs, the color tells you each PR's *current* state, but not *which ones moved
-since you last looked* — the dot closes that gap.
+stack of PR tabs, the color tells you each PR's _current_ state, but not _which ones moved
+since you last looked_ — the dot closes that gap.
 
 This builds entirely on the PR status favicon feature (`2026-06-09-pr-status-favicon`):
 the background registry + `chrome.alarms` poll, the content-script favicon renderer, the
@@ -29,7 +29,7 @@ still can't tell what's new. The unread dot marks the tabs whose rendered favico
 while you weren't looking at them. (See origin: `docs/brainstorms/2026-06-10-pr-unread-indicator-requirements.md`.)
 
 **Framing note (resolved in planning):** the signal is "changed while this tab was
-**backgrounded**" (you switched to another tab, or minimized the window) — *not* "while you
+**backgrounded**" (you switched to another tab, or minimized the window) — _not_ "while you
 walked away from the computer." If the PR tab stays the foreground tab while you alt-tab to
 another app, Page Visibility still reports `visible` and no dot lights. Window/app-level blur
 detection is deferred to v2.
@@ -48,7 +48,7 @@ implements them):
   `chrome.storage.session`; survives SW eviction. → Units 3, 6
 - **U3** — baseline set on first fetch regardless of visibility (never-seen tab shows no dot
   until it changes; dot means "changed since auto-open"). → Unit 5
-- **U4 / U4a** — latch on a *visible favicon change* while hidden; "differs" measured via a
+- **U4 / U4a** — latch on a _visible favicon change_ while hidden; "differs" measured via a
   defined `FaviconSpec` equality (not raw status, not `JSON.stringify`). → Units 1, 5
 - **U5** — on become-visible: clear `unread`, re-baseline `seenStatus = currentStatus`, redraw.
   → Units 5, 6, 7
@@ -58,7 +58,7 @@ implements them):
   passed as a separate draw arg (not a `FaviconSpec` field); hue orthogonal to the 5 status
   colors; background owns `unread`; content may optimistically clear on become-visible. → Units 2, 6, 7
 - **U8 / U8a / U8c** — Options "Currently monitoring" row shows unread (OR across the PR's tabs)
-  + header count copy + pending/error row states; live via `storage.onChanged`. → Units 3, 8
+  - header count copy + pending/error row states; live via `storage.onChanged`. → Units 3, 8
 - **U8b** — opening a PR from the list clears its unread. No dedicated logic: opening focuses
   the tab → its content script reports `visible` → U5 clears the latch. → Units 6, 7 (via U5)
 - **U9** — three-tier poll cadence: unsettled (fast ~60s) · settled-but-open (slow ~5 min) ·
@@ -85,7 +85,7 @@ implements them):
 - **"Mark all read"** affordance in the Options list — v2.
 - **MV3 background/content/DOM integration test harness** — this repo unit-tests only `lib/`;
   adding a Chrome-API/DOM test harness is a separate infra task. This plan extracts the risky
-  logic into pure `lib/` modules (Units 1, 4, 5) that *are* unit-tested, and verifies the glue
+  logic into pure `lib/` modules (Units 1, 4, 5) that _are_ unit-tested, and verifies the glue
   (Units 6–8) via enumerated manual scenarios.
 
 ## Context & Research
@@ -131,7 +131,7 @@ implements them):
   `faviconSpecEqual(a, b)` in `lib/pr-status.ts` and pass `unread` as a separate draw argument so
   the equality surface used by the latch stays clean.
 - **Drop U6 (re-baseline on hide)** — while a tab is visible, every poll sets `seenStatus =
-  newStatus`, so at the moment it goes hidden `seenStatus` already equals the current status.
+newStatus`, so at the moment it goes hidden `seenStatus` already equals the current status.
   Re-baselining on hide is redundant and reintroduces the hide-window race. Baseline advances on
   register (U3), poll-while-visible (U4 visible branch), and become-visible (U5) only.
 - **Three-tier poll cadence (U9)** — merged/closed **stop**; **only approved+passing** (the one
@@ -155,7 +155,7 @@ implements them):
   nothing else self-corrects, so a stale A-result must be **skipped** (no latch, no push) rather
   than painted onto B. Both guards live in Unit 6 and are stated as explicit invariants.
 - **Undefined baseline is "set, don't latch"** — `entry.status`/`seenStatus` are absent until the
-  first *successful* fetch (no token, or first fetch errored). Never pass `undefined` to
+  first _successful_ fetch (no token, or first fetch errored). Never pass `undefined` to
   `toFaviconSpec`: `onPoll` with `seenStatus === undefined` sets the baseline and does **not**
   latch; `onVisibilityChange→visible` clears `unread` but only re-baselines when `entry.status` is
   defined (and skips the redraw push when there's no status, or pushes `"fetching"`).
@@ -195,9 +195,9 @@ implements them):
 
 ## High-Level Technical Design
 
-> *This illustrates the intended approach and is directional guidance for review, not
+> _This illustrates the intended approach and is directional guidance for review, not
 > implementation specification. The implementing agent should treat it as context, not code to
-> reproduce.*
+> reproduce._
 
 **Unread latch — per-tab state transitions** (lives in `lib/unread.ts`, driven by the background):
 
@@ -217,11 +217,11 @@ stateDiagram-v2
 
 **Poll cadence tiers** (decided by `lib/poll-policy.ts`, applied each ~60s alarm tick):
 
-| PR state | Tier | Behavior |
-|----------|------|----------|
-| Open, anything pending **or** changes-requested | **fast** | poll every tick (~60s) |
-| Open **and** approved + all checks passing (nothing actionable pending) | **slow** | poll if `now − lastPolledAt ≥ ~5 min` |
-| `merged` / `closed` | **stop** | never poll; alarm cleared when no fast/slow entries remain |
+| PR state                                                                | Tier     | Behavior                                                   |
+| ----------------------------------------------------------------------- | -------- | ---------------------------------------------------------- |
+| Open, anything pending **or** changes-requested                         | **fast** | poll every tick (~60s)                                     |
+| Open **and** approved + all checks passing (nothing actionable pending) | **slow** | poll if `now − lastPolledAt ≥ ~5 min`                      |
+| `merged` / `closed`                                                     | **stop** | never poll; alarm cleared when no fast/slow entries remain |
 
 ## Implementation Units
 
@@ -234,10 +234,12 @@ stateDiagram-v2
 **Dependencies:** None
 
 **Files:**
+
 - Modify: `lib/pr-status.ts`
 - Test: `lib/pr-status.test.ts`
 
 **Approach:**
+
 - Add `faviconSpecEqual(a: FaviconSpec, b: FaviconSpec): boolean`. Normalize the optional fields:
   when `a.whole || b.whole`, equality compares `whole` + `left` only (the right half and `plus`
   are not painted on a whole icon). Otherwise compare `left`, `right`, and `!!a.plus === !!b.plus`
@@ -248,13 +250,14 @@ stateDiagram-v2
 **Patterns to follow:** existing pure exports + tests in `lib/pr-status.ts` / `lib/pr-status.test.ts`.
 
 **Test scenarios:**
+
 - Happy path: identical specs → `true`; differing `left` → `false`; differing `right` → `false`.
 - Edge case: `{left:'red',right:'green'}` vs `{left:'red',right:'green',plus:undefined}` → `true`.
 - Edge case: `plus:true` vs `plus:false`/absent → `false`.
 - Edge case: `{whole:true,left:'purple',right:'purple'}` vs `{whole:true,left:'purple',right:'grey'}`
   → `true` (right ignored when whole).
 - Edge case: whole vs non-whole with same `left`/`right` → `false`.
-- Edge case (the flap): `toFaviconSpec` of a *failing* check differs from a *passing* one → `false`
+- Edge case (the flap): `toFaviconSpec` of a _failing_ check differs from a _passing_ one → `false`
   on the pair, confirming an intermediate failing state would latch.
 
 **Verification:** new tests pass; the comparator is referenced only from `lib/unread.ts` (Unit 5).
@@ -269,20 +272,22 @@ separate `unread` argument.
 **Dependencies:** None
 
 **Files:**
+
 - Modify: `lib/favicon.ts`
 - Test: `lib/favicon.test.ts` (new)
 
 **Approach:**
+
 - Extend `geometry()` with a top-right dot anchor (center + radius + ring), derived as a fraction
   of `size` so 16px and 32px stay proportional. Keep it clear of the `plus` (which is low-left).
 - Add an `unread` flag to both renderers — **a separate argument**, e.g.
-  `drawFavicon(spec, size, opts?: { unread?: boolean })` and the SVG equivalent — *not* a field on
+  `drawFavicon(spec, size, opts?: { unread?: boolean })` and the SVG equivalent — _not_ a field on
   `FaviconSpec` (keeps Unit 1's equality clean).
 - Canvas: draw the dot **after** the split/`whole` fill — crucially, also before the `whole`
   branch's early `return`, so merged/closed icons get the dot.
 - SVG: append the dot markup in both the split and `whole` bodies.
 - **Clip consistency:** the canvas applies `ctx.clip()` (rounded-rect) before all drawing, so the
-  canvas dot is always clipped; but the existing SVG renders the `plus` *outside* the
+  canvas dot is always clipped; but the existing SVG renders the `plus` _outside_ the
   `<g clip-path>` group. Treat the dot **identically in both** — render it inside the clip in both
   renderers and **inset it from the top-right corner** (inside the corner radius) so neither
   renderer crops it. This keeps the tab favicon (canvas) and the Options preview (SVG) pixel-consistent.
@@ -294,6 +299,7 @@ separate `unread` argument.
 and the `plus` rendering in both (`lib/favicon.ts`).
 
 **Test scenarios:**
+
 - Happy path: `faviconSvg(spec, size, {unread:true})` includes the dot markup; `{unread:false}`
   (and the no-opts call) omits it.
 - Edge case: dot present on a split spec (`{left,right}`).
@@ -314,11 +320,13 @@ half-colors and on a whole icon, not colliding with the "+".
 **Dependencies:** None
 
 **Files:**
+
 - Modify: `lib/registry.ts`
 - Modify: `lib/messages.ts`
 - Test: none directly (type/shape change; behavior tested in Units 5/6 logic and Unit 8)
 
 **Approach:**
+
 - `RegistryEntry` gains: `seenStatus?: PrStatus` (baseline), `visible?: boolean` (last reported),
   `unread?: boolean` (latch), `lastPolledAt?: number` (for Unit 4's cadence). Keep `status` as the
   latest fetched status (already present).
@@ -346,11 +354,13 @@ half-colors and on a whole icon, not colliding with the "+".
 **Dependencies:** Unit 3
 
 **Files:**
+
 - Create: `lib/poll-policy.ts`
 - Test: `lib/poll-policy.test.ts` (new)
 - (Wiring into `background/index.ts` happens in Unit 6.)
 
 **Approach:**
+
 - `pollTier(status: PrStatus | undefined): "fast" | "slow" | "stop"` — `merged`/`closed` → `stop`;
   else **only** `review === "approved" && check === "success"` (open, nothing pending) → `slow`;
   else (incl. `changes-requested`, any pending, and no status yet) → `fast`. **Does not call
@@ -364,6 +374,7 @@ half-colors and on a whole icon, not colliding with the "+".
 **Patterns to follow:** `isSettled` in `lib/pr-status.ts` (pure status predicate + tests).
 
 **Test scenarios:**
+
 - Happy path: pending check → `fast`; approved+passing (open) → `slow`; merged → `stop`; closed → `stop`.
 - Edge case: `undefined` status (pre-first-fetch) → `fast`.
 - Edge case (the changes-requested fix): changes-requested + failing (open) → **`fast`** (not slow);
@@ -384,10 +395,12 @@ half-colors and on a whole icon, not colliding with the "+".
 **Dependencies:** Units 1, 3
 
 **Files:**
+
 - Create: `lib/unread.ts`
 - Test: `lib/unread.test.ts` (new)
 
 **Approach:**
+
 - Model transitions as pure functions over the unread-relevant slice of an entry
   (`{ seenStatus?, visible?, unread? }`) plus the latest status. Suggested shape (directional):
   - `onRegister(firstStatus, visible)` → `{ seenStatus: firstStatus, visible, unread: false }`.
@@ -404,7 +417,7 @@ half-colors and on a whole icon, not colliding with the "+".
 - **Never pass `undefined` to `toFaviconSpec`** — the guards above ensure the equality compare only
   runs once a real `seenStatus` exists (`toFaviconSpec` reads `.state` and would throw on
   `undefined`). This is the load-bearing invariant the reviewers flagged across feasibility/adversarial.
-- Errors are simply *not routed* through `onPoll` (Unit 6 calls `onPoll` only on a successful
+- Errors are simply _not routed_ through `onPoll` (Unit 6 calls `onPoll` only on a successful
   fetch), so `seenStatus`/`unread` are inherently preserved across a `prError`.
 - `seenStatus` is the baseline; the entry's existing `status` field remains the latest status and
   is what `onVisibilityChange` reads as `currentStatus`.
@@ -412,6 +425,7 @@ half-colors and on a whole icon, not colliding with the "+".
 **Technical design:** see the state diagram in High-Level Technical Design.
 
 **Test scenarios:**
+
 - Happy path (never-viewed boxed tab): register hidden with status X (no dot); poll Y≠X while
   hidden → unread latches; "changed since auto-open" contract.
 - Happy path (watched live): register visible with X; poll Y while visible → `seenStatus=Y`, no dot.
@@ -441,10 +455,12 @@ service worker.
 **Dependencies:** Units 3, 4, 5
 
 **Files:**
+
 - Modify: `background/index.ts`
 - Test: none (MV3 SW glue — no harness; logic covered by Units 4, 5). Manual scenarios below.
 
 **Approach:**
+
 - **Visibility handler:** add a `visibility` branch to the `onMessage` router; on receipt, call
   `onVisibilityChange` for `sender.tab.id`'s entry, persist, and on become-visible push a redraw
   (`{ type: "prStatus", status: entry.status, unread: false }`) **only when `entry.status` is
@@ -477,6 +493,7 @@ service worker.
 and `persistRegistry` in `background/index.ts`.
 
 **Test scenarios (manual / integration — no SW harness):**
+
 - Integration: box a stack into background tabs → no dots initially; let a pending check finish →
   that tab's favicon gains a dot while backgrounded.
 - Integration: focus a dotted tab → dot clears immediately; re-background it → no dot until it
@@ -484,7 +501,7 @@ and `persistRegistry` in `background/index.ts`.
 - Integration (U9): approve+pass a PR (→ slow tier), then request changes while its tab is
   backgrounded → the PR flips back to fast tier and the dot appears within ~60s (polling did not stop).
 - Integration (U10): background a dotted tab long enough to evict the SW, trigger a poll → the entry
-  + dot persist (not pruned); close the tab → entry is removed (`onRemoved`).
+  - dot persist (not pruned); close the tab → entry is removed (`onRemoved`).
 - Integration (race — re-register): start a slow fetch on PR-A's tab, SPA-nav that tab to PR-B
   before the fetch resolves → the stale A-result is skipped (ref-match guard); B's favicon/dot are
   correct, no phantom dot.
@@ -504,10 +521,12 @@ the base favicon behavior.
 **Dependencies:** Units 2, 3
 
 **Files:**
+
 - Modify: `contents/github-pr-favicon.ts`
 - Test: none (DOM/content glue — no harness). Manual scenarios below.
 
 **Approach:**
+
 - On `register`, send the initial `visible` (`document.visibilityState === "visible"`) in the
   `registerPr` message.
 - Add a `visibilitychange` listener that posts `{ type: "visibility", visible }` to the background;
@@ -515,10 +534,10 @@ the base favicon behavior.
 - The `prStatus` handler now carries `unread`; change `drawStatus(status, unread)` to pass it into
   `drawFavicon(spec, size, { unread })`. The **MutationObserver re-assert needs no change** — the
   dot is baked into the rendered PNG, so re-asserting the cached `lastDataUri` already preserves it
-  across GitHub's icon rewrites. (Earlier framing was backwards: a `{spec, unread}` cache is *not*
+  across GitHub's icon rewrites. (Earlier framing was backwards: a `{spec, unread}` cache is _not_
   needed for re-assert.)
 - Add module-level state `lastUnread: boolean` (and reuse the existing last-status to recompute the
-  spec) **only** for the optimistic clear: on become-visible, redraw the *same* status with
+  spec) **only** for the optimistic clear: on become-visible, redraw the _same_ status with
   `unread: false` to drop the dot instantly. Without this the optimistic clear can't recompute a
   dot-less icon. Update `register`'s `drawStatus(res.status ?? "fetching")` and the `!lastDataUri`
   error path to pass `unread` through (default `false`).
@@ -531,6 +550,7 @@ lifecycle and the `applyFavicon`/`drawStatus` + MutationObserver re-assert in
 `contents/github-pr-favicon.ts`.
 
 **Test scenarios (manual / integration):**
+
 - Integration: backgrounding the tab and a background status change → dot appears on the tab strip.
 - Integration: GitHub/Turbo rewrites the favicon while unread → the dot survives the re-assert.
 - Integration: focusing the tab → dot clears instantly (optimistic), stays cleared after the
@@ -548,10 +568,12 @@ lifecycle and the `applyFavicon`/`drawStatus` + MutationObserver re-assert in
 **Dependencies:** Units 2, 3
 
 **Files:**
+
 - Modify: `options.tsx`
 - Test: none (React/DOM glue — no harness). Manual scenarios below.
 
 **Approach:**
+
 - Extend `MonitoredItem` with `unread: boolean`; in `coalesce`, OR `entry.unread` across the PR's
   tabs (alongside the existing `error` OR).
 - Render the dot on the row — reuse the favicon `unread` rendering (the row already shows
@@ -569,6 +591,7 @@ lifecycle and the `applyFavicon`/`drawStatus` + MutationObserver re-assert in
 `options.tsx`.
 
 **Test scenarios (manual / integration):**
+
 - Integration: a backgrounded PR latches a dot → its Options row shows the dot and the header count
   increments, live (no reload).
 - Integration: focus that PR's tab → row dot clears live and the header count decrements.
@@ -605,15 +628,15 @@ is unread.
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| Slow-tier polling raises GitHub rate-limit use for long-open stacks | ~5 min tier (vs 60s) + existing per-PR coalescing (R10) + jitter; only approved+passing open PRs are slow, merged/closed stop. |
-| **Slow-tier detection latency (residual, accepted)** — an approved+passing PR that changes while you're away is detected with up to ~5 min lag, so the "exactly the PRs that changed" criterion is *eventually* consistent for that one state | Accepted for v1; narrowing slow-tier to approved+passing only keeps the high-churn states (pending, changes-requested) fast; note the latency in the README so it's not read as instantaneous. |
-| Dot illegible or color-confusable at 16px on some half-colors | Locked constraint (orthogonal hue + contrasting ring, top-right, clear of "+"); prototype at 16px/32px in Unit 2 against all five colors before finalizing. |
-| Removing the push-failure prune leaks stale entries for crashed/discarded-but-open tabs (and they keep polling) | `onRemoved` cleans on actual close; footprint is tiny. Optionally mark `discarded` tabs as stop-tier via `chrome.tabs.onUpdated` so the leak doesn't amplify rate-limit (noted in Unit 6; full discard-survival is v2). |
-| Visibility/poll & poll/re-register ordering | Single-threaded SW + **per-tab** `entry.visible` re-read before each `onPoll` + **ref-match guard** after the fetch (skip stale results when the tab re-registered to another PR). Documented as explicit Unit 6 invariants. |
-| Race correctness can't be proven by manual scenarios | The race-sensitive logic is pushed into defensive *invariants in code* (ref-match skip, per-tab visible read, undefined-baseline guard) rather than relying on timing; the pure transition functions are unit-tested (Units 1, 4, 5). MV3 integration harness is explicitly deferred. |
-| MutationObserver re-assert | No risk — the dot is baked into the rendered PNG, so re-asserting `lastDataUri` preserves it; no change needed to the re-assert path (Unit 7). |
+| Risk                                                                                                                                                                                                                                          | Mitigation                                                                                                                                                                                                                                                                            |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Slow-tier polling raises GitHub rate-limit use for long-open stacks                                                                                                                                                                           | ~5 min tier (vs 60s) + existing per-PR coalescing (R10) + jitter; only approved+passing open PRs are slow, merged/closed stop.                                                                                                                                                        |
+| **Slow-tier detection latency (residual, accepted)** — an approved+passing PR that changes while you're away is detected with up to ~5 min lag, so the "exactly the PRs that changed" criterion is _eventually_ consistent for that one state | Accepted for v1; narrowing slow-tier to approved+passing only keeps the high-churn states (pending, changes-requested) fast; note the latency in the README so it's not read as instantaneous.                                                                                        |
+| Dot illegible or color-confusable at 16px on some half-colors                                                                                                                                                                                 | Locked constraint (orthogonal hue + contrasting ring, top-right, clear of "+"); prototype at 16px/32px in Unit 2 against all five colors before finalizing.                                                                                                                           |
+| Removing the push-failure prune leaks stale entries for crashed/discarded-but-open tabs (and they keep polling)                                                                                                                               | `onRemoved` cleans on actual close; footprint is tiny. Optionally mark `discarded` tabs as stop-tier via `chrome.tabs.onUpdated` so the leak doesn't amplify rate-limit (noted in Unit 6; full discard-survival is v2).                                                               |
+| Visibility/poll & poll/re-register ordering                                                                                                                                                                                                   | Single-threaded SW + **per-tab** `entry.visible` re-read before each `onPoll` + **ref-match guard** after the fetch (skip stale results when the tab re-registered to another PR). Documented as explicit Unit 6 invariants.                                                          |
+| Race correctness can't be proven by manual scenarios                                                                                                                                                                                          | The race-sensitive logic is pushed into defensive _invariants in code_ (ref-match skip, per-tab visible read, undefined-baseline guard) rather than relying on timing; the pure transition functions are unit-tested (Units 1, 4, 5). MV3 integration harness is explicitly deferred. |
+| MutationObserver re-assert                                                                                                                                                                                                                    | No risk — the dot is baked into the rendered PNG, so re-asserting `lastDataUri` preserves it; no change needed to the re-assert path (Unit 7).                                                                                                                                        |
 
 ## Documentation / Operational Notes
 

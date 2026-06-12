@@ -58,28 +58,29 @@ states in the tab icon. (see origin:
 
 ### External References (verified during brainstorm)
 
-- GitHub GraphQL: `repository.pullRequest` exposes `reviewDecision`, `state`, `isDraft`, and `commits(last:1){nodes{commit{statusCheckRollup{state}}}}`. *(GitHub GraphQL docs)*
-- `chrome.alarms` is the eviction-surviving MV3 timer; **minimum period ~60s** (sub-60s is clamped). *(Chrome extensions docs / feasibility review)*
-- Plasmo: `options.tsx` registers `options_ui` (open-in-tab) and does **not** add `default_popup` or alter `chrome.action.onClicked` (box-select activation is unaffected). *(Context7 /plasmohq/docs / feasibility review)*
+- GitHub GraphQL: `repository.pullRequest` exposes `reviewDecision`, `state`, `isDraft`, and `commits(last:1){nodes{commit{statusCheckRollup{state}}}}`. _(GitHub GraphQL docs)_
+- `chrome.alarms` is the eviction-surviving MV3 timer; **minimum period ~60s** (sub-60s is clamped). _(Chrome extensions docs / feasibility review)_
+- Plasmo: `options.tsx` registers `options_ui` (open-in-tab) and does **not** add `default_popup` or alter `chrome.action.onClicked` (box-select activation is unaffected). _(Context7 /plasmohq/docs / feasibility review)_
 
 ## Key Technical Decisions
 
-- **Background owns the token, the API, and the poll loop.** The content script never sees the token; it sends "I'm PR X" and receives a normalized status. Endpoint hard-coded to `https://api.github.com/graphql`. *(R2, R3a, R10)*
-- **Token in `chrome.storage.local`** (persists; not `sync` = cross-device leak, not `session` = wiped on restart). *(R3)*
-- **`chrome.alarms`-driven central poll**, one alarm tick re-fetches all not-yet-settled registered PR tabs; jitter per-PR; pending registry persisted in `chrome.storage.session` so it survives SW eviction; back off on rate-limit. *(R8a, R10)*
-- **Pure render-spec, imperative draw.** `lib` maps status → a `FaviconSpec` (pure, unit-tested); a `drawFavicon(spec)` canvas function turns it into a data URI (verified visually). *(R6, encoding)*
-- **Color-blind-safe encoding:** check state = base fill color **and** a distinct center glyph/shape (✓ / hollow ring / ✕ / dash); review = corner badge differing by shape (filled dot / ring / absent). *(encoding)*
-- **Self-guarded MutationObserver:** tag the injected `<link>`, ignore self-mutations, debounce re-assert; capture the original `<link rel=icon>` to restore on leave. *(R7, R7a)*
-- **v1 takes `reviewDecision` at face value** (required-review verdict); does not query `latestReviews`. The badge means "required-review decision," documented. *(origin caveat)*
-- **Auth-error surface is per-tab, not a global badge.** Chrome renders a per-tab `setBadgeText({tabId})` *over* the global one, so box-select's per-tab "ON" would mask a global error badge on the exact PR tabs that matter. Set the error indicator (`!`) **per registered PR tab** (error wins over "ON" when both apply) plus a `chrome.action.setTitle` tooltip. The toolbar **click stays box-select's** (arming), so recovery is via right-click → Options, not the click. *(badge contention)*
-- **Validate the token against a capability the feature uses**, not `viewer{login}` — a least-privilege fine-grained PAT (the documented recipe) may lack account scope and would false-reject. Probe `repository.pullRequest` on a known repo (or accept any 200 with non-null data). *(token validation)*
-- **Read checks from the PR head commit, not blindly `commits(last:1)`** — assert the rollup's commit `oid` equals `pullRequest.headRefOid` (or use `headRef.target`); a null rollup maps to "no checks" and is **not** conflated with "pending." *(check correctness)*
-- **One named alarm + in-tick stagger, coalesced by `prRef`.** `chrome.alarms` are extension-global and clamped to a 60s floor in production; a single `pr-poll` alarm's tick re-fetches all unsettled PRs, fetching each distinct `owner/repo/number` **once** and fanning the result to every tab showing it; jitter is in-tick stagger. *(alarms topology, rate limit)*
-- **Token in `storage.local` is readable by any content script** (shared namespace) — background confinement is convention, not an enforced control. For this first-party personal tool we **accept** that: (a) the token is never put in a message, (b) the key is clearly named, (c) the gap is documented; an SW-memory-only hardening is noted as future. *(token exposure — see Risks)*
+- **Background owns the token, the API, and the poll loop.** The content script never sees the token; it sends "I'm PR X" and receives a normalized status. Endpoint hard-coded to `https://api.github.com/graphql`. _(R2, R3a, R10)_
+- **Token in `chrome.storage.local`** (persists; not `sync` = cross-device leak, not `session` = wiped on restart). _(R3)_
+- **`chrome.alarms`-driven central poll**, one alarm tick re-fetches all not-yet-settled registered PR tabs; jitter per-PR; pending registry persisted in `chrome.storage.session` so it survives SW eviction; back off on rate-limit. _(R8a, R10)_
+- **Pure render-spec, imperative draw.** `lib` maps status → a `FaviconSpec` (pure, unit-tested); a `drawFavicon(spec)` canvas function turns it into a data URI (verified visually). _(R6, encoding)_
+- **Color-blind-safe encoding:** check state = base fill color **and** a distinct center glyph/shape (✓ / hollow ring / ✕ / dash); review = corner badge differing by shape (filled dot / ring / absent). _(encoding)_
+- **Self-guarded MutationObserver:** tag the injected `<link>`, ignore self-mutations, debounce re-assert; capture the original `<link rel=icon>` to restore on leave. _(R7, R7a)_
+- **v1 takes `reviewDecision` at face value** (required-review verdict); does not query `latestReviews`. The badge means "required-review decision," documented. _(origin caveat)_
+- **Auth-error surface is per-tab, not a global badge.** Chrome renders a per-tab `setBadgeText({tabId})` _over_ the global one, so box-select's per-tab "ON" would mask a global error badge on the exact PR tabs that matter. Set the error indicator (`!`) **per registered PR tab** (error wins over "ON" when both apply) plus a `chrome.action.setTitle` tooltip. The toolbar **click stays box-select's** (arming), so recovery is via right-click → Options, not the click. _(badge contention)_
+- **Validate the token against a capability the feature uses**, not `viewer{login}` — a least-privilege fine-grained PAT (the documented recipe) may lack account scope and would false-reject. Probe `repository.pullRequest` on a known repo (or accept any 200 with non-null data). _(token validation)_
+- **Read checks from the PR head commit, not blindly `commits(last:1)`** — assert the rollup's commit `oid` equals `pullRequest.headRefOid` (or use `headRef.target`); a null rollup maps to "no checks" and is **not** conflated with "pending." _(check correctness)_
+- **One named alarm + in-tick stagger, coalesced by `prRef`.** `chrome.alarms` are extension-global and clamped to a 60s floor in production; a single `pr-poll` alarm's tick re-fetches all unsettled PRs, fetching each distinct `owner/repo/number` **once** and fanning the result to every tab showing it; jitter is in-tick stagger. _(alarms topology, rate limit)_
+- **Token in `storage.local` is readable by any content script** (shared namespace) — background confinement is convention, not an enforced control. For this first-party personal tool we **accept** that: (a) the token is never put in a message, (b) the key is clearly named, (c) the gap is documented; an SW-memory-only hardening is noted as future. _(token exposure — see Risks)_
 
 ## Open Questions
 
 ### Resolved During Planning
+
 - Favicon visual: filled rounded-rect, fill by check color + center glyph; review corner badge = dot/triangle/absent (not hollow-ring); shape-distinct, validated at 16/32px (Unit 3).
 - GraphQL shape: single `repository.pullRequest` query (`reviewDecision`, `state`, `isDraft`, head-commit rollup with `headRefOid` assertion); no `latestReviews` in v1.
 - Token validation: probe `repository.pullRequest` (not `viewer{login}`, which false-rejects fine-grained PATs); distinct auth/network/scope messages.
@@ -89,6 +90,7 @@ states in the tab icon. (see origin:
 - Token exposure: accepted that content scripts can read `storage.local`; mitigated by never messaging the token + documentation (first-party personal tool).
 
 ### Deferred to Implementation
+
 - [Needs research] Exact frequency/trigger of GitHub's own favicon re-sets on a PR page — observe during dev to tune the debounce window.
 - Exact canvas glyph geometry at 16/32px — iterate visually.
 
@@ -110,7 +112,7 @@ states in the tab icon. (see origin:
 
 ## High-Level Technical Design
 
-> *Directional guidance for review, not implementation specification.*
+> _Directional guidance for review, not implementation specification._
 
 ```mermaid
 sequenceDiagram
@@ -144,11 +146,13 @@ sequenceDiagram
 **Dependencies:** Unit 3 of the box-select work is unrelated; this depends only on the current repo state.
 
 **Files:**
+
 - Modify: `package.json` (add `"alarms"` to `manifest.permissions`)
 - Create: `options.tsx` (token field, Save / Clear, inline validation result + last-error)
 - Create: `lib/github-api.ts` partial — `validateToken(fetchFn, token)` (used here and Unit 4), `lib/github-api.test.ts`
 
 **Approach:**
+
 - `options.tsx` reads/writes the token in `chrome.storage.local` under a clearly-named key (e.g. `prFavicon.token`). It shows the **required PAT scopes** inline (fine-grained: Pull requests: Read + Commit statuses: Read) with a link to the README, plus distinct messages per validation outcome and a persistent "last auth error" line (R5a). Clear removes the key **and** notifies the background to restore favicons.
 - `validateToken(fetchFn, token)` probes a capability the feature actually uses — a tiny `repository.pullRequest` query, **not** `viewer{login}` (a fine-grained PAT may lack account scope and would false-reject). Returns `{ ok, error? }` distinguishing **auth** (401/invalid), **network**, and best-effort **insufficient-scope**; on classic tokens it inspects `X-OAuth-Scopes` and warns if write scopes are present.
 - Register `chrome.runtime.setUninstallURL` → GitHub's token-revocation guide; the page + README remind the user to revoke the PAT on uninstall (storage.local may persist after removal).
@@ -156,6 +160,7 @@ sequenceDiagram
 **Patterns to follow:** `lib/*` injected-dependency pattern (like `lib/tab-group.ts`'s `TabGroupApi`).
 
 **Test scenarios:**
+
 - Happy path: `validateToken` with a fetch stub returning a non-null `repository.pullRequest` → `{ok:true}`.
 - Error path: 401 → `{ok:false, error:"auth"}`; network throw → `{ok:false, error:"network"}`; empty token → `{ok:false}` without calling fetch.
 - Edge: classic token whose `X-OAuth-Scopes` includes a write scope → `{ok:true, warn:"broad-scope"}`.
@@ -173,15 +178,18 @@ sequenceDiagram
 **Dependencies:** None.
 
 **Files:**
+
 - Create: `lib/github-pr.ts` (+ `lib/github-pr.test.ts`) — `parsePrUrl(url)` → `{owner,repo,number}|null` (matches `/pull/{digits}` + subtabs; rejects `/pulls`, `github.dev`, gist).
 - Create: `lib/pr-status.ts` (+ `lib/pr-status.test.ts`) — `normalize(graphqlData)` → `{ review: "approved"|"changes"|"none", check: "success"|"pending"|"failure"|"none", state: "open"|"closed"|"merged", isDraft }`; `isSettled(status)`; `toFaviconSpec(status | "fetching")` → `FaviconSpec { fill, glyph, badge }`.
 
 **Approach:**
+
 - `normalize` is fully null-safe: missing `pullRequest`, null `reviewDecision`, null/empty `statusCheckRollup`, empty `commits` all map to defined enum values (never throw).
 - Check status reads the **head commit**: prefer asserting the rollup commit `oid` equals `headRefOid`; a null rollup → `"none"` (no checks), documented as possibly differing from GitHub's merge-ref checks and **distinct** from `"pending"`.
 - `isSettled` = `check ∈ {success,failure} && review ∈ {approved,changes}` OR `state ∈ {closed,merged}`.
 
 **Test scenarios:**
+
 - Happy path (`parsePrUrl`): `https://github.com/o/r/pull/409` and `.../pull/409/files` → `{o,r,409}`.
 - Edge (`parsePrUrl`): `/pulls`, `/issues/409`, `github.dev/...`, `gist.github.com/...`, non-github → null.
 - Happy path (`normalize`): APPROVED+SUCCESS+OPEN → `{review:"approved",check:"success",state:"open"}`.
@@ -202,18 +210,21 @@ sequenceDiagram
 **Dependencies:** Unit 2 (`FaviconSpec` type).
 
 **Files:**
+
 - Create: `lib/favicon.ts` — `drawFavicon(spec): string` (data URI). Renders at 32px (downscales to 16), `devicePixelRatio`-aware.
 
 **Approach:**
+
 - Base: filled rounded-rect in `spec.fill` (success `#2da44e` / pending `#bf8700` / failure `#cf222e` / none `#8c959f`) with a center glyph (`✓` / hollow ring / `✕` / dash) so states differ by **shape** not just hue.
 - Corner badge (top-right) by review: filled dot (approved) / small **triangle** (changes-requested) / absent (none). Deliberately **not** a hollow ring — that would collide with the "pending" center glyph and is illegible at ~4px. Min stroke ~1.5px @32 + a contrasting halo so the badge survives downscale to 16px.
 - "fetching": grey base, hollow center, no badge — visually distinct from "no checks" and from the unmodified GitHub icon.
 - Render the PNG at a fixed high resolution (32 or 64px) and let the browser downscale into the favicon slot — the page's `devicePixelRatio` is **not** the right multiplier for a `<link rel=icon>` data URI.
 
-**Technical design:** *(directional)* draw on a `<canvas>` 2D context (the content script has a `document`), `toDataURL("image/png")`. Exact geometry tuned visually.
+**Technical design:** _(directional)_ draw on a `<canvas>` 2D context (the content script has a `document`), `toDataURL("image/png")`. Exact geometry tuned visually.
 
 **Test scenarios:**
-- Add the `canvas` dev dependency so a Vitest smoke test asserts the 13 specs (12 check×review combos + "fetching") each yield a **distinct, non-empty** data URI. *(Pure spec coverage lives in Unit 2; exact pixel geometry is still verified visually at 16/32px incl. grayscale.)*
+
+- Add the `canvas` dev dependency so a Vitest smoke test asserts the 13 specs (12 check×review combos + "fetching") each yield a **distinct, non-empty** data URI. _(Pure spec coverage lives in Unit 2; exact pixel geometry is still verified visually at 16/32px incl. grayscale.)_
 
 **Verification:** Manual: render all 12 combos + fetching at 16px and 32px; each is visually distinguishable, including in a grayscale check.
 
@@ -228,20 +239,23 @@ sequenceDiagram
 **Dependencies:** Unit 1 (`validateToken`/storage key), Unit 2 (parse/normalize/isSettled).
 
 **Files:**
+
 - Modify: `background/index.ts` (add: `fetchPrStatus` call, tab registry + session rehydrate, single `pr-poll` alarm, per-tab error badge + title, message handlers, token-clear restore broadcast)
 - Modify: `lib/github-api.ts` (+ tests) — `fetchPrStatus(fetchFn, token, prRef)` → normalized status or `{error:"auth"|"rate-limit"|"network"}`
 - Modify: `lib/messages.ts` — add `registerPr`, `unregisterPr`, `prStatus` (push), `restoreFavicon` (token-clear) types
 
 **Approach:**
+
 - Registry keyed by `tabId → {prRef, lastStatus, settled}`, mirrored to `chrome.storage.session` under a **distinct** key (e.g. `prFavicon.registry` — not box-select's `groupColorCounter`; targeted `.remove`, never `.clear`); the in-memory registry is **rehydrated from session on SW startup**. `registerPr({tabId, prRef})` **replaces** any prior entry for that tabId (resetting lastStatus/settled).
 - On `registerPr`: read token from `chrome.storage.local`; none → reply `{noToken:true}` (R4). Else `fetchPrStatus` → reply status; on `auth` error set the **per-tab** error badge (`!`) + `setTitle` tooltip (R5a) and reply `{error}`.
-- A single `pr-poll` `chrome.alarms` (60s floor) runs while any registered tab is unsettled; each tick **coalesces by `prRef`** (one fetch per distinct PR, fanned to every tab showing it), staggers in-tick for jitter, backs off on 403, pushes `prStatus` via `chrome.tabs.sendMessage(tabId, …).catch(prune)`, and clears the alarm when all settled or no tabs remain. A fetch error *after* a prior successful draw pushes an error/stale status so the tab reverts rather than freezing a stale icon.
+- A single `pr-poll` `chrome.alarms` (60s floor) runs while any registered tab is unsettled; each tick **coalesces by `prRef`** (one fetch per distinct PR, fanned to every tab showing it), staggers in-tick for jitter, backs off on 403, pushes `prStatus` via `chrome.tabs.sendMessage(tabId, …).catch(prune)`, and clears the alarm when all settled or no tabs remain. A fetch error _after_ a prior successful draw pushes an error/stale status so the tab reverts rather than freezing a stale icon.
 - `chrome.tabs.onRemoved` / `unregisterPr` prune the registry. On token-clear (from Options), broadcast `restoreFavicon` to registered tabs.
 - Endpoint constant `https://api.github.com/graphql`; token read **only** here, never messaged out.
 
 **Execution note:** Implement `fetchPrStatus` + `isSettled`-driven poll-continuation test-first — the fetch→normalize→settle loop is the correctness core.
 
 **Test scenarios:**
+
 - Happy path: `fetchPrStatus` stubbed → normalized status (uses Unit 2 `normalize`).
 - Error path: 401 → `{error:"auth"}`; 403 + rate-limit headers → `{error:"rate-limit"}`; network throw → `{error:"network"}`; none throw.
 - Edge: `registerPr` with no token → `{noToken:true}`, no fetch.
@@ -266,10 +280,12 @@ sequenceDiagram
 **Dependencies:** Unit 2 (`parsePrUrl`/spec), Unit 3 (`drawFavicon`), Unit 4 (background messaging).
 
 **Files:**
+
 - Create: `contents/github-pr-favicon.ts` (`PlasmoCSConfig` match `https://github.com/*/*/pull/*` + runtime `parsePrUrl` gate)
 - Modify: `contents/box-select.ts` (add an explicit `message.type` guard so it ignores favicon messages — its listener currently returns `undefined`, fine for fire-and-forget; this is a clarity guard, not a functional fix)
 
 **Approach:**
+
 - On load: `parsePrUrl(location.href)`; if a PR → capture the current `<link rel="icon">` (href), draw the **fetching** favicon immediately, and `registerPr` with the background. Receives `prStatus` pushes → `drawFavicon(toFaviconSpec(status))` → replace the icon link.
 - `<head>` MutationObserver re-asserts the injected link if GitHub overwrites it; the injected link carries a data-attribute tag so the observer ignores its own writes; re-assertion is debounced.
 - SPA nav (Turbo): on URL change, if still a PR (different number) re-register; if no longer a PR, **restore** the captured original favicon, disconnect the observer, and `unregisterPr`. Same restore on `pagehide`/unload.
@@ -279,6 +295,7 @@ sequenceDiagram
 **Patterns to follow:** `contents/box-select.ts` CSUI/shadow conventions are not needed here (no overlay); reuse its single-teardown discipline for observer + restore.
 
 **Test scenarios:**
+
 - Happy path (jsdom): PR URL → original `<link>` captured, fetching favicon injected, `registerPr` sent; a pushed `prStatus` swaps the link's href to a new data URI.
 - Edge: non-PR URL → no registration, no favicon change.
 - Integration: GitHub replaces the `<link>` → observer re-injects ours; the observer does **not** loop on its own write (tagged-node guard).
@@ -293,28 +310,28 @@ sequenceDiagram
 ## System-Wide Impact
 
 - **Interaction graph:** New `registerPr`/`unregisterPr`/`prStatus` messages share `background/index.ts`'s `onMessage` with box-select's `createTabGroup`/`contentDisarmed`; both content scripts share the channel and must ignore foreign types. `chrome.alarms` + `chrome.tabs.onRemoved` drive/prune polling. Action badge now reflects token errors (distinct from box-select's "ON" — coordinate badge usage).
-- **Badge contention:** Chrome renders a per-tab badge *over* the global default, so a global error badge would be **masked** on box-selected (armed) PR tabs. Resolve: set the auth-error badge (`!`) **per-tab** via `setBadgeText({tabId})` on each registered PR tab, with error taking precedence over box-select's `"ON"` when a tab is both; plus a `setTitle` tooltip. The toolbar **click stays box-select's** (arming) — error recovery is via right-click → Options, not the click.
+- **Badge contention:** Chrome renders a per-tab badge _over_ the global default, so a global error badge would be **masked** on box-selected (armed) PR tabs. Resolve: set the auth-error badge (`!`) **per-tab** via `setBadgeText({tabId})` on each registered PR tab, with error taking precedence over box-select's `"ON"` when a tab is both; plus a `setTitle` tooltip. The toolbar **click stays box-select's** (arming) — error recovery is via right-click → Options, not the click.
 - **Error propagation:** all network/API failures normalize to a typed result; the page favicon never breaks (R5); auth errors surface via badge + Options page (R5a).
 - **State lifecycle:** registry mirrored to `chrome.storage.session` (survives SW eviction; lost on restart — benign, re-registered on next load). Token in `chrome.storage.local` (persists).
 - **Unchanged invariants:** box-select behavior, manifest host permissions (`https://*/*`), and the `chrome.action.onClicked` activation are unchanged; only `alarms` permission and an options page are added.
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| MV3 SW eviction kills a plain poll timer | `chrome.alarms` (≥60s) + registry in `chrome.storage.session` (Unit 4). |
-| GitHub re-sets its favicon → flicker/observer loop | Tagged-node self-mutation guard + debounce (Unit 5); tune window after observing real frequency (deferred). |
-| Token leak surface | Token confined to background + `storage.local`; never messaged to content scripts; endpoint hard-coded (Units 1,4). |
-| Rate limit with a large box-selected stack | Centralized, coalesced fetching + 403 backoff (Unit 4). |
-| Action badge clobbered between box-select and token-error | Per-tab vs global badge separation; verify in Unit 4/5. |
-| 16px two-channel illegibility / color-blindness | Shape-distinct encoding validated at 16/32px + grayscale (Units 2,3). |
-| Stale icons on token expiry read as authoritative | Discoverable error surface (per-tab badge + Options page), R5a (Units 1,4). |
-| Content scripts can read the token from `storage.local` | Accepted for a first-party personal tool: token never messaged, key named, gap documented; SW-memory-only is a future hardening. |
-| Global error badge masked on armed PR tabs (per-tab wins) | Error badge set **per-tab** on registered PR tabs, error > "ON" precedence (Unit 4). |
-| `commits(last:1)` ≠ PR head (force-push/merge) → wrong check | Assert rollup commit `oid` == `headRefOid`; null → "no checks" (Unit 2). |
-| `viewer{login}` validation false-rejects least-privilege PATs | Validate via a `repository.pullRequest` probe (Unit 1). |
-| Same PR in two tabs → duplicate API spend | Coalesce the poll by `prRef`, fan out to all tabs (Unit 4). |
-| `chrome.alarms` floor is a minimum, not a deadline | Success criterion states "typically 60–90s," not a guarantee. |
+| Risk                                                          | Mitigation                                                                                                                       |
+| ------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| MV3 SW eviction kills a plain poll timer                      | `chrome.alarms` (≥60s) + registry in `chrome.storage.session` (Unit 4).                                                          |
+| GitHub re-sets its favicon → flicker/observer loop            | Tagged-node self-mutation guard + debounce (Unit 5); tune window after observing real frequency (deferred).                      |
+| Token leak surface                                            | Token confined to background + `storage.local`; never messaged to content scripts; endpoint hard-coded (Units 1,4).              |
+| Rate limit with a large box-selected stack                    | Centralized, coalesced fetching + 403 backoff (Unit 4).                                                                          |
+| Action badge clobbered between box-select and token-error     | Per-tab vs global badge separation; verify in Unit 4/5.                                                                          |
+| 16px two-channel illegibility / color-blindness               | Shape-distinct encoding validated at 16/32px + grayscale (Units 2,3).                                                            |
+| Stale icons on token expiry read as authoritative             | Discoverable error surface (per-tab badge + Options page), R5a (Units 1,4).                                                      |
+| Content scripts can read the token from `storage.local`       | Accepted for a first-party personal tool: token never messaged, key named, gap documented; SW-memory-only is a future hardening. |
+| Global error badge masked on armed PR tabs (per-tab wins)     | Error badge set **per-tab** on registered PR tabs, error > "ON" precedence (Unit 4).                                             |
+| `commits(last:1)` ≠ PR head (force-push/merge) → wrong check  | Assert rollup commit `oid` == `headRefOid`; null → "no checks" (Unit 2).                                                         |
+| `viewer{login}` validation false-rejects least-privilege PATs | Validate via a `repository.pullRequest` probe (Unit 1).                                                                          |
+| Same PR in two tabs → duplicate API spend                     | Coalesce the poll by `prRef`, fan out to all tabs (Unit 4).                                                                      |
+| `chrome.alarms` floor is a minimum, not a deadline            | Success criterion states "typically 60–90s," not a guarantee.                                                                    |
 
 ## Documentation / Operational Notes
 
