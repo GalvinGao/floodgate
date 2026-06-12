@@ -1,0 +1,667 @@
+import { isArmableUrl } from "~lib/activation"
+import { fetchOpenPrs, fetchPrStatus } from "~lib/github-api"
+import { parsePrUrl, type PrRef } from "~lib/github-pr"
+import type {
+  AddWatchedRepoResponse,
+  ContentRequest,
+  CreateTabGroupRequest,
+  CreateTabGroupResponse,
+  FaviconCommand,
+  FaviconRequest,
+  RegisterPrResponse
+} from "~lib/messages"
+import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
+import { REGISTRY_KEY, type RegistryEntry } from "~lib/registry"
+import { openAndGroup, type TabGroupApi } from "~lib/tab-group"
+import { onPoll, onRegister, onVisibilityChange } from "~lib/unread"
+import {
+  highestNumber,
+  LAST_FETCHED_KEY,
+  parseOwnerRepo,
+  repoKey,
+  selectPrsToOpen,
+  WATCHED_KEY,
+  type RepoKey,
+  type WatchedRepo,
+  type WatchedSnapshot
+} from "~lib/watched"
+
+// Single-window scope: at most one armed tab at a time. In-memory state is fine
+// to lose on SW idle — re-arming is one click, and createTabGroup is self-contained.
+let armedTabId: number | null = null
+
+// PR tabs are auto-pinned on open. Two in-memory sets gate that:
+//  • groupOpenedTabs — tabs opened (or led) into a tab group; never auto-pinned.
+//  • autoPinAttempted — tabs already evaluated once, so a manual unpin sticks.
+const groupOpenedTabs = new Set<number>()
+const autoPinAttempted = new Set<number>()
+
+const BADGE_COLOR = "#1a73e8"
+const COLOR_COUNTER_KEY = "groupColorCounter"
+
+async function setBadge(tabId: number, on: boolean): Promise<void> {
+  await chrome.action.setBadgeText({ tabId, text: on ? "ON" : "" })
+  if (on) {
+    await chrome.action.setBadgeBackgroundColor({ tabId, color: BADGE_COLOR })
+  }
+}
+
+/** Clear armed state + per-tab badge; optionally tell the content script to tear down. */
+async function disarm(
+  tabId: number | null,
+  notifyContent: boolean
+): Promise<void> {
+  if (tabId == null) return
+  if (armedTabId === tabId) armedTabId = null
+  await setBadge(tabId, false)
+  if (notifyContent) {
+    chrome.tabs.sendMessage(tabId, { type: "disarm" }).catch(() => {
+      // content script may be gone; badge is already cleared
+    })
+  }
+}
+
+async function handleActionClick(tab: chrome.tabs.Tab): Promise<void> {
+  const tabId = tab.id
+  if (tabId == null) return
+
+  // Re-click on the armed tab toggles off.
+  if (armedTabId === tabId) {
+    await disarm(tabId, true)
+    return
+  }
+
+  // onClicked fires on every tab; only arm where the content script can run.
+  if (!isArmableUrl(tab.url)) return
+
+  if (armedTabId != null) await disarm(armedTabId, true)
+
+  armedTabId = tabId
+  await setBadge(tabId, true)
+
+  try {
+    await chrome.tabs.sendMessage(tabId, { type: "arm" })
+  } catch {
+    // No content-script receiver (tab opened before install/update, or still
+    // loading). Roll back so the icon never shows a stuck "ON".
+    await disarm(tabId, false)
+  }
+}
+
+chrome.action.onClicked.addListener((tab) => {
+  void handleActionClick(tab)
+})
+
+chrome.tabs.onActivated.addListener(({ tabId }) => {
+  if (armedTabId != null && armedTabId !== tabId) {
+    void disarm(armedTabId, true)
+  }
+})
+
+chrome.tabs.onRemoved.addListener((tabId) => {
+  if (armedTabId === tabId) armedTabId = null
+  groupOpenedTabs.delete(tabId)
+  autoPinAttempted.delete(tabId)
+})
+
+async function readColorCounter(): Promise<number> {
+  const stored = await chrome.storage.session.get(COLOR_COUNTER_KEY)
+  const value = stored[COLOR_COUNTER_KEY]
+  return typeof value === "number" ? value : 0
+}
+
+const chromeTabGroupApi: TabGroupApi = {
+  async create(url) {
+    const tab = await chrome.tabs.create({ url, active: false })
+    if (tab.id != null) groupOpenedTabs.add(tab.id) // → excluded from auto-pin
+    return tab.id
+  },
+  async group(tabIds) {
+    return chrome.tabs.group({ tabIds })
+  },
+  async update(groupId, info) {
+    await chrome.tabGroups.update(groupId, info)
+  }
+}
+
+async function handleCreateTabGroup(
+  message: CreateTabGroupRequest,
+  leadTabId: number | undefined,
+  sendResponse: (response: CreateTabGroupResponse) => void
+): Promise<void> {
+  // The lead (current) tab joins the group, so it must be unpinned first
+  // (pinned tabs can't be grouped) and is excluded from auto-pin thereafter.
+  if (leadTabId != null) {
+    groupOpenedTabs.add(leadTabId)
+    await chrome.tabs.update(leadTabId, { pinned: false }).catch(() => {})
+  }
+
+  const counter = await readColorCounter()
+  const result = await openAndGroup(
+    message.links,
+    message.groupName,
+    counter,
+    chromeTabGroupApi,
+    leadTabId
+  )
+  // Advance the persisted counter only when a group actually formed, so cycling
+  // survives SW restarts instead of resetting to the first color.
+  if (result.groupId != null) {
+    await chrome.storage.session.set({ [COLOR_COUNTER_KEY]: counter + 1 })
+  }
+  sendResponse({
+    ok: result.groupId != null,
+    opened: result.opened,
+    failed: result.failed
+  })
+}
+
+chrome.runtime.onMessage.addListener(
+  (message: ContentRequest, sender, sendResponse) => {
+    if (message?.type === "createTabGroup") {
+      // sender.tab is the page the selection was made on → group it first.
+      void handleCreateTabGroup(message, sender.tab?.id, sendResponse)
+      return true // keep the channel open for the async response
+    }
+    if (message?.type === "contentDisarmed") {
+      void disarm(sender.tab?.id ?? null, false)
+    }
+    return false
+  }
+)
+
+// ============================================================================
+// PR status favicon — token-gated fetch + central chrome.alarms poll
+// ============================================================================
+
+const TOKEN_KEY = "prFavicon.token"
+const POLL_ALARM = "pr-poll"
+
+// tabId -> entry. Mirrored to chrome.storage.session so it survives SW eviction.
+const prRegistry = new Map<number, RegistryEntry>()
+
+void chrome.storage.session.get(REGISTRY_KEY).then((stored) => {
+  const saved = stored[REGISTRY_KEY] as
+    | Record<string, RegistryEntry>
+    | undefined
+  if (!saved) return
+  for (const [tabId, entry] of Object.entries(saved)) {
+    prRegistry.set(Number(tabId), entry)
+  }
+  void reconcilePollAlarm()
+})
+
+function persistRegistry(): void {
+  const obj: Record<number, RegistryEntry> = {}
+  for (const [tabId, entry] of prRegistry) obj[tabId] = entry
+  void chrome.storage.session.set({ [REGISTRY_KEY]: obj })
+}
+
+async function getToken(): Promise<string | null> {
+  const stored = await chrome.storage.local.get(TOKEN_KEY)
+  const token = stored[TOKEN_KEY]
+  return typeof token === "string" && token.trim() ? token.trim() : null
+}
+
+function refKey(ref: PrRef): string {
+  return `${ref.owner}/${ref.repo}#${ref.number}`
+}
+
+function pushToTab(tabId: number, message: FaviconCommand): void {
+  chrome.tabs.sendMessage(tabId, message).catch(() => {
+    // A failed push just means "couldn't redraw right now" (tab backgrounded,
+    // discarded, or mid-reload). Do NOT prune here — that would drop the unread
+    // latch + Options row. chrome.tabs.onRemoved (and unregisterPr on SPA-nav)
+    // are the authoritative prune signals (U10).
+  })
+}
+
+async function setErrorBadge(tabId: number, on: boolean): Promise<void> {
+  try {
+    await chrome.action.setBadgeText({ tabId, text: on ? "!" : "" })
+    if (on) {
+      await chrome.action.setBadgeBackgroundColor({ tabId, color: "#cf222e" })
+      await chrome.action.setTitle({
+        tabId,
+        title: "PR Status: token error — open the extension's Options to fix"
+      })
+    } else {
+      await chrome.action.setTitle({ tabId, title: "" })
+    }
+  } catch {
+    // tab gone
+  }
+}
+
+async function reconcilePollAlarm(): Promise<void> {
+  const statuses = [...prRegistry.values()].map((e) => e.status)
+  // Keep the alarm alive while there's anything to poll: PR-status tabs OR
+  // watched repos (W4a — watched polling must run even with zero PR tabs open).
+  const pollable = hasPollable(statuses) || watchedRepos.size > 0
+  if (pollable && (await getToken())) {
+    chrome.alarms.create(POLL_ALARM, { periodInMinutes: 1 })
+  } else {
+    await chrome.alarms.clear(POLL_ALARM)
+  }
+  persistRegistry()
+}
+
+const delay = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** Fetch one ref once and fan the result out to every tab showing it. */
+async function fetchAndPushRef(
+  ref: PrRef,
+  tabIds: number[],
+  token: string
+): Promise<void> {
+  const result = await fetchPrStatus(fetch, token, ref)
+  const now = Date.now()
+  if (result.ok && result.status) {
+    const status = result.status
+    for (const tabId of tabIds) {
+      const entry = prRegistry.get(tabId)
+      // Ref-match guard: the tab may have re-registered to another PR during the
+      // fetch (SPA nav). Skip a stale result so it never paints A onto B (U6).
+      if (!entry || refKey(entry.ref) !== refKey(ref)) continue
+      entry.lastPolledAt = now
+      entry.status = status
+      entry.error = false
+      // Compute the latch against the entry's *current* visibility (read here,
+      // post-await) and the seenStatus baseline; onPoll never latches a visible
+      // tab and only latches a hidden tab on a visible favicon change.
+      Object.assign(entry, onPoll(entry, status))
+      await setErrorBadge(tabId, false)
+      pushToTab(tabId, { type: "prStatus", status, unread: !!entry.unread })
+    }
+    persistRegistry()
+    return
+  }
+  const isAuth = result.error === "auth"
+  for (const tabId of tabIds) {
+    const entry = prRegistry.get(tabId)
+    if (!entry || refKey(entry.ref) !== refKey(ref)) continue
+    // Errors do not latch: leave seenStatus/unread untouched (the error badge +
+    // Options "couldn't fetch" surface it). Still stamp the poll attempt.
+    entry.lastPolledAt = now
+    entry.error = true
+    if (isAuth) await setErrorBadge(tabId, true)
+    pushToTab(tabId, { type: "prError" })
+  }
+  persistRegistry()
+}
+
+/** One poll tick: coalesce registered tabs by PR, fetch each once, fan out. */
+async function pollAll(force = false): Promise<void> {
+  const token = await getToken()
+  if (!token) return
+  const now = Date.now()
+  const byRef = new Map<string, { ref: PrRef; tabIds: number[] }>()
+  for (const [tabId, entry] of prRegistry) {
+    // Tiered cadence (U9): fast every tick, slow (approved+passing) every ~5min,
+    // merged/closed never. `force` (token just set) refreshes everything pollable.
+    const tier = pollTier(entry.status)
+    const due = force
+      ? tier !== "stop"
+      : isPollDue(tier, entry.lastPolledAt, now)
+    if (!due) continue
+    const key = refKey(entry.ref)
+    const group = byRef.get(key) ?? { ref: entry.ref, tabIds: [] }
+    group.tabIds.push(tabId)
+    byRef.set(key, group)
+  }
+  let first = true
+  for (const { ref, tabIds } of byRef.values()) {
+    if (!first) await delay(150) // flat in-tick stagger (jitter), not cumulative
+    first = false
+    await fetchAndPushRef(ref, tabIds, token)
+  }
+  await pollWatchedRepos(token)
+  await reconcilePollAlarm()
+}
+
+/**
+ * Auto-pin a freshly-opened PR tab. Acts once per tab (so a manual unpin is
+ * never undone), and skips tabs opened into a tab group (box-select) or already
+ * in any group — those are the explicit exclusion.
+ *
+ * Dedup: if the same PR (owner/repo/number) is already pinned in this window,
+ * close the new tab and focus the existing pinned one instead of pinning a second.
+ */
+async function maybeAutoPin(tabId: number): Promise<void> {
+  if (autoPinAttempted.has(tabId) || groupOpenedTabs.has(tabId)) return
+  autoPinAttempted.add(tabId) // mark before await: no re-entrant double-pin
+  let tab: chrome.tabs.Tab
+  try {
+    tab = await chrome.tabs.get(tabId)
+  } catch {
+    return // tab gone
+  }
+  // groupId === -1 is TAB_GROUP_ID_NONE (ungrouped). Pinned or grouped → leave it.
+  if (tab.pinned || tab.groupId !== -1) return
+
+  // Dedup: same PR already pinned in this window → focus it, close the new tab.
+  const ref = tab.url ? parsePrUrl(tab.url) : null
+  if (ref && tab.windowId != null) {
+    const key = refKey(ref)
+    const pinned = await chrome.tabs.query({
+      pinned: true,
+      windowId: tab.windowId
+    })
+    const existing = pinned.find((t) => {
+      if (t.id == null || t.id === tabId || !t.url) return false
+      const r = parsePrUrl(t.url)
+      return r != null && refKey(r) === key
+    })
+    if (existing?.id != null) {
+      await chrome.tabs.update(existing.id, { active: true }).catch(() => {})
+      await chrome.tabs.remove(tabId).catch(() => {})
+      return // deduped: existing pinned tab focused, new tab closed
+    }
+  }
+
+  await chrome.tabs.update(tabId, { pinned: true }).catch(() => {})
+}
+
+async function handleRegisterPr(
+  ref: PrRef,
+  tabId: number,
+  visible: boolean
+): Promise<RegisterPrResponse> {
+  void maybeAutoPin(tabId) // pin PR tabs on open (independent of token)
+  // Always register (so a later tokenChanged can reach this tab) with the
+  // reported visibility; the unread baseline is seeded on the first fetch.
+  prRegistry.set(tabId, { ref, visible, unread: false })
+  persistRegistry()
+
+  const token = await getToken()
+  if (!token) return { hasToken: false }
+
+  const result = await fetchPrStatus(fetch, token, ref)
+  const entry = prRegistry.get(tabId)
+  // Ref-match guard: the tab may have re-registered to another PR mid-fetch.
+  if (!entry || refKey(entry.ref) !== refKey(ref)) return { hasToken: true }
+  if (result.ok && result.status) {
+    const status = result.status
+    entry.status = status
+    entry.error = false
+    entry.lastPolledAt = Date.now()
+    // Seed the baseline (seenStatus = first status, unread = false).
+    Object.assign(entry, onRegister(status, entry.visible ?? visible))
+    await setErrorBadge(tabId, false)
+    await reconcilePollAlarm()
+    return { hasToken: true, status }
+  }
+  entry.error = true
+  if (result.error === "auth") await setErrorBadge(tabId, true)
+  // Start/keep the poll alarm so a transient first-fetch failure (rate limit,
+  // network blip) is retried on the next tick — the entry's tier is non-stop.
+  // Mirrors the success path; reconcilePollAlarm persists the registry too.
+  await reconcilePollAlarm()
+  return { hasToken: true, error: true }
+}
+
+/** A content script reported its tab's Page-Visibility transition. */
+function handleVisibility(tabId: number, visible: boolean): void {
+  const entry = prRegistry.get(tabId)
+  if (!entry) return
+  Object.assign(entry, onVisibilityChange(entry.status, visible))
+  if (visible) {
+    // Clear the latch on the PR's OTHER tabs too: the Options row ORs unread
+    // across a PR's tabs, so a single-tab clear would leave the row stuck lit.
+    // Siblings stay hidden but advance their baseline to the status already seen
+    // here, so they don't immediately re-latch on the next poll.
+    const key = refKey(entry.ref)
+    for (const [id, sib] of prRegistry) {
+      if (id === tabId || !sib.unread || refKey(sib.ref) !== key) continue
+      sib.unread = false
+      if (sib.status) {
+        sib.seenStatus = sib.status
+        pushToTab(id, { type: "prStatus", status: sib.status, unread: false })
+      }
+    }
+  }
+  persistRegistry()
+  // Became visible with a known status → push a redraw clearing the dot (the
+  // content script also clears optimistically; this is the authoritative push).
+  if (visible && entry.status) {
+    pushToTab(tabId, { type: "prStatus", status: entry.status, unread: false })
+  }
+}
+
+function unregister(tabId: number | null | undefined): void {
+  if (tabId == null) return
+  if (prRegistry.delete(tabId)) {
+    persistRegistry()
+    void setErrorBadge(tabId, false)
+    void reconcilePollAlarm()
+  }
+}
+
+chrome.tabs.onRemoved.addListener((tabId) => unregister(tabId))
+
+chrome.alarms.onAlarm.addListener((alarm) => {
+  if (alarm.name === POLL_ALARM) void pollAll()
+})
+
+chrome.runtime.onMessage.addListener(
+  (message: FaviconRequest, sender, sendResponse) => {
+    const tabId = sender.tab?.id
+    if (message?.type === "registerPr" && tabId != null) {
+      handleRegisterPr(message.ref, tabId, message.visible)
+        .then(sendResponse)
+        .catch(() => sendResponse({ hasToken: false }))
+      return true // async response
+    }
+    if (message?.type === "addWatchedRepo") {
+      handleAddWatchedRepo(message.owner, message.repo)
+        .then(sendResponse)
+        .catch(() => sendResponse({ ok: false, error: "network" }))
+      return true // async response
+    }
+    if (message?.type === "visibility" && tabId != null) {
+      handleVisibility(tabId, message.visible)
+    } else if (message?.type === "unregisterPr") {
+      unregister(tabId)
+    } else if (message?.type === "tokenChanged") {
+      void pollAll(true) // token now present → refresh everything
+    } else if (message?.type === "tokenCleared") {
+      for (const id of prRegistry.keys()) {
+        void setErrorBadge(id, false)
+        pushToTab(id, { type: "restoreFavicon" })
+      }
+      prRegistry.clear()
+      persistRegistry()
+      void chrome.alarms.clear(POLL_ALARM)
+    } else if (message?.type === "removeWatchedRepo") {
+      handleRemoveWatchedRepo(message.owner, message.repo)
+    }
+    return false
+  }
+)
+
+// ============================================================================
+// Watched repositories — auto-open new PRs
+// ============================================================================
+
+const WATCHED_TICK_CAP = 5 // max PRs auto-opened per poll tick, across all repos
+
+const watchedRepos = new Map<RepoKey, WatchedRepo>()
+
+/**
+ * Resolves once the watch list (storage.local) has loaded. The watched poll branch
+ * awaits this so the first post-restart tick can't re-open the backlog before the
+ * watermarks/handled sets are in memory (W11).
+ */
+const watchedReady: Promise<void> = (async () => {
+  const local = await chrome.storage.local.get(WATCHED_KEY)
+  const saved = local[WATCHED_KEY] as WatchedSnapshot | undefined
+  if (saved) {
+    for (const [key, entry] of Object.entries(saved))
+      watchedRepos.set(key, entry)
+  }
+  // Re-arm the alarm now that watched repos are loaded — the module-top reconcile
+  // ran before this resolved, so without this a restart with watched repos but no
+  // PR tabs would leave the alarm cleared and the feature would never poll (W4a/W11).
+  await reconcilePollAlarm()
+})()
+
+function persistWatched(): void {
+  const obj: WatchedSnapshot = {}
+  for (const [key, entry] of watchedRepos) obj[key] = entry
+  void chrome.storage.local.set({ [WATCHED_KEY]: obj })
+}
+
+async function handleAddWatchedRepo(
+  owner: string,
+  repo: string
+): Promise<AddWatchedRepoResponse> {
+  const parsed = parseOwnerRepo(`${owner}/${repo}`)
+  if (!parsed) return { ok: false, error: "invalid" }
+  const key = repoKey(parsed.owner, parsed.repo)
+  if (watchedRepos.has(key)) return { ok: false, error: "duplicate" }
+  const token = await getToken()
+  if (!token) return { ok: false, error: "no-token" }
+  // The add-time list both checks access and sets the watermark (highest open PR
+  // number now), so only later PRs auto-open. A no-access/typo error rejects the add.
+  const result = await fetchOpenPrs(fetch, token, parsed)
+  if (!result.ok || !result.prs) {
+    // Transient (network/rate-limit) errors keep their own message so we don't
+    // wrongly blame the repo name/token; auth/notfound/unknown → "no-access".
+    const e = result.error
+    return {
+      ok: false,
+      error: e === "network" || e === "rate-limit" ? e : "no-access"
+    }
+  }
+  watchedRepos.set(key, {
+    owner: parsed.owner,
+    repo: parsed.repo,
+    watermark: highestNumber(result.prs),
+    handled: []
+  })
+  persistWatched()
+  // The add-time list query above IS a fetch — stamp it so Options shows
+  // "Last fetched just now" immediately, instead of waiting for the first tick.
+  void chrome.storage.session.set({ [LAST_FETCHED_KEY]: Date.now() })
+  await reconcilePollAlarm()
+  return { ok: true }
+}
+
+function handleRemoveWatchedRepo(owner: string, repo: string): void {
+  if (watchedRepos.delete(repoKey(owner, repo))) {
+    persistWatched()
+    void reconcilePollAlarm()
+  }
+}
+
+/**
+ * The window to open auto-opened PR tabs in: the last-focused normal window
+ * (excludes Options/devtools/popup). `undefined` lets chrome.tabs.create fall
+ * back to the current window.
+ */
+async function targetWindowId(): Promise<number | undefined> {
+  try {
+    const win = await chrome.windows.getLastFocused({ windowTypes: ["normal"] })
+    return win?.id
+  } catch {
+    return undefined
+  }
+}
+
+/**
+ * Open a watched-repo PR as an inactive tab in `windowId` (the content script
+ * then pins + dedups it). Logs every open to the service-worker console so new
+ * auto-opened PRs are visible while debugging. Returns the tab, or null on failure.
+ */
+async function openPrTab(
+  owner: string,
+  repo: string,
+  number: number,
+  { windowId, title }: { windowId?: number; title?: string }
+): Promise<chrome.tabs.Tab | null> {
+  const url = `https://github.com/${owner}/${repo}/pull/${number}`
+  const created = await chrome.tabs
+    .create({ url, windowId, active: false })
+    .catch(() => null)
+  const ref = `${owner}/${repo}#${number}`
+  if (created == null) {
+    console.warn(`[watched] failed to open new PR ${ref}`)
+  } else {
+    console.info(
+      `[watched] opened new PR ${ref}${title ? ` — ${title}` : ""} in window ${created.windowId} (inactive)`
+    )
+  }
+  return created
+}
+
+/** One tick of watched-repo detection → auto-open (W4–W9). Token is already verified. */
+async function pollWatchedRepos(token: string): Promise<void> {
+  await watchedReady
+  if (watchedRepos.size === 0) return
+
+  // Build the cross-window already-open set once per tick (W7), plus an in-tick
+  // guard so two candidates / a slow content-script load can't double-open.
+  const openRefs = new Set<string>()
+  try {
+    const tabs = await chrome.tabs.query({ url: "*://github.com/*/*/pull/*" })
+    for (const t of tabs) {
+      const r = t.url ? parsePrUrl(t.url) : null
+      if (r) openRefs.add(refKey(r))
+    }
+  } catch {
+    // tabs.query failed → proceed with an empty set (worst case: one dup tab).
+  }
+  const openingThisTick = new Set<string>()
+
+  let remaining = WATCHED_TICK_CAP // global per-tick cap across all repos (W8b)
+  let windowId: number | undefined
+  let windowResolved = false
+  let first = true
+  for (const entry of watchedRepos.values()) {
+    if (remaining <= 0) break
+    if (!first) await delay(150) // share the favicon poll's in-tick stagger
+    first = false
+
+    const result = await fetchOpenPrs(fetch, token, entry)
+    if (!result.ok || !result.prs) continue // per-repo error isolation (W4)
+
+    const { toOpen } = selectPrsToOpen({
+      prs: result.prs,
+      watermark: entry.watermark,
+      handled: entry.handled,
+      cap: remaining
+    })
+    for (const pr of toOpen) {
+      const key = refKey({
+        owner: entry.owner,
+        repo: entry.repo,
+        number: pr.number
+      })
+      if (openRefs.has(key) || openingThisTick.has(key)) continue // W7: already open
+      openingThisTick.add(key)
+      if (!windowResolved) {
+        windowId = await targetWindowId()
+        windowResolved = true
+      }
+      const created = await openPrTab(entry.owner, entry.repo, pr.number, {
+        windowId,
+        title: pr.title
+      })
+      if (created == null) {
+        // create failed (e.g. the target window closed mid-tick) — leave the PR
+        // UNHANDLED so it retries next tick, and re-resolve the window next time.
+        windowResolved = false
+        windowId = undefined
+        continue
+      }
+      entry.handled.push(pr.number) // mark handled only after we actually open it
+      remaining--
+      if (remaining <= 0) break
+    }
+  }
+  persistWatched()
+  // Stamp the completed poll cycle so Options can show "last fetched X ago".
+  void chrome.storage.session.set({ [LAST_FETCHED_KEY]: Date.now() })
+}
+
+export {}
