@@ -1,5 +1,7 @@
 # Floodgate — _for GitHub_
 
+[![Available in the Chrome Web Store](https://img.shields.io/chrome-web-store/v/mdbhlpponkfcnihbolinmgdglggapepk?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white&color=4285F4)](https://chromewebstore.google.com/detail/floodgate/mdbhlpponkfcnihbolinmgdglggapepk)
+
 <img width="558" height="680" alt="image" src="https://github.com/user-attachments/assets/ca419cab-1916-4932-81ec-b0c61735d802" />
 
 Floodgate is a Chrome extension (MV3) for working with GitHub pull requests. It:
@@ -14,6 +16,12 @@ Floodgate is a Chrome extension (MV3) for working with GitHub pull requests. It:
 
 Works on **github.com** only. The PR features need a GitHub token (a fine-grained
 PAT with _Pull requests: Read_); set it in the extension's **Options** page.
+
+## Install
+
+Install from the
+[Chrome Web Store](https://chromewebstore.google.com/detail/floodgate/mdbhlpponkfcnihbolinmgdglggapepk),
+then open the **Options** page to add your GitHub token.
 
 ## Develop
 
