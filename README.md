@@ -1,6 +1,6 @@
 # Floodgate — _for GitHub_
 
-[![Available in the Chrome Web Store](https://img.shields.io/chrome-web-store/v/mdbhlpponkfcnihbolinmgdglggapepk?label=Chrome%20Web%20Store&logo=googlechrome&logoColor=white&color=4285F4)](https://chromewebstore.google.com/detail/floodgate/mdbhlpponkfcnihbolinmgdglggapepk)
+[<img alt="Available in the Chrome Web Store" height="58" src="https://developer.chrome.com/static/docs/webstore/branding/image/iNEddTyWiMfLSwFD6qGq.png" />](https://chromewebstore.google.com/detail/floodgate/mdbhlpponkfcnihbolinmgdglggapepk)
 
 <img width="558" height="680" alt="image" src="https://github.com/user-attachments/assets/ca419cab-1916-4932-81ec-b0c61735d802" />
 
