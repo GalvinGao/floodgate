@@ -34,6 +34,7 @@ const svgSrc = (spec: FaviconSpec, unread = false) =>
   `data:image/svg+xml,${encodeURIComponent(faviconSvg(spec, 64, { unread }))}`
 
 const TOKEN_KEY = "prFavicon.token"
+const AUTO_PIN_KEY = "prFavicon.autoPin"
 
 type Status =
   | { kind: "idle" }
@@ -589,8 +590,9 @@ function WatchedRepos() {
     <section>
       <h3 style={{ margin: "0 0 6px" }}>Watched repositories</h3>
       <p style={{ marginTop: 0, color: "#57606a", fontSize: 13 }}>
-        New PRs opened after you add a repo open automatically as inactive,
-        pinned tabs. Renovate and draft PRs are skipped.
+        New PRs opened after you add a repo open automatically as inactive tabs
+        (pinned only if auto-pin is on, below). Renovate and draft PRs are
+        skipped.
       </p>
 
       <LastFetched />
@@ -707,6 +709,72 @@ function WatchedRepos() {
           })}
         </ul>
       )}
+    </section>
+  )
+}
+
+// --- Auto-pin toggle ---------------------------------------------------------
+
+/** Opt-in switch for auto-pinning PR tabs. Off by default (key absent === off). */
+function AutoPinToggle() {
+  const [autoPin, setAutoPin] = useState(false)
+
+  useEffect(() => {
+    let alive = true
+    chrome.storage.local.get(AUTO_PIN_KEY).then((local) => {
+      if (alive) setAutoPin(local[AUTO_PIN_KEY] === true)
+    })
+    const onChange = (
+      changes: Record<string, chrome.storage.StorageChange>,
+      area: string
+    ) => {
+      if (area === "local" && changes[AUTO_PIN_KEY]) {
+        setAutoPin(changes[AUTO_PIN_KEY].newValue === true)
+      }
+    }
+    chrome.storage.onChanged.addListener(onChange)
+    return () => {
+      alive = false
+      chrome.storage.onChanged.removeListener(onChange)
+    }
+  }, [])
+
+  const toggle = (next: boolean) => {
+    setAutoPin(next)
+    void chrome.storage.local.set({ [AUTO_PIN_KEY]: next })
+  }
+
+  return (
+    <section>
+      <h3 style={{ margin: "0 0 6px" }}>Pinning</h3>
+      <label
+        style={{
+          display: "flex",
+          alignItems: "flex-start",
+          gap: 10,
+          cursor: "pointer"
+        }}>
+        <input
+          type="checkbox"
+          checked={autoPin}
+          onChange={(e) => toggle(e.target.checked)}
+          style={{ marginTop: 3, flex: "none" }}
+        />
+        <span>
+          <span style={{ fontWeight: 600 }}>Auto-pin pull-request tabs</span>
+          <span
+            style={{
+              display: "block",
+              fontSize: 13,
+              color: "#57606a",
+              marginTop: 2
+            }}>
+            When on, opening a PR pins its tab (and watched-repo PRs open
+            pinned). Off by default — leave it off to keep PR tabs unpinned. A
+            tab you unpin by hand is never re-pinned.
+          </span>
+        </span>
+      </label>
     </section>
   )
 }
@@ -849,6 +917,12 @@ function OptionsPage() {
       />
 
       <WatchedRepos />
+
+      <hr
+        style={{ border: 0, borderTop: "1px solid #eaeef2", margin: "20px 0" }}
+      />
+
+      <AutoPinToggle />
 
       <hr
         style={{ border: 0, borderTop: "1px solid #eaeef2", margin: "20px 0" }}
