@@ -24,6 +24,14 @@ export interface RegistryEntry {
   unread?: boolean
   /** Epoch ms of this tab's last poll — drives the slow-tier (settled-but-open) cadence. */
   lastPolledAt?: number
+  /**
+   * Epoch ms of this ref's last *signal*-triggered fetch (DOM poke / visibility
+   * re-poll). Deliberately distinct from `lastPolledAt`: the alarm poll stamps
+   * `lastPolledAt` on every tick, so reusing it would let a recent alarm poll
+   * suppress a legitimate signal (and a signal suppress the next due poll). The
+   * signal gate reads this; the tiered alarm cadence reads `lastPolledAt`.
+   */
+  lastSignalFetchedAt?: number
 }
 
 export type RegistrySnapshot = Record<string, RegistryEntry>
