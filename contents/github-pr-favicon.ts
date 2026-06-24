@@ -271,10 +271,12 @@ function resetMergeboxSignal(): void {
 async function register(ref: PrRef): Promise<void> {
   currentRef = ref
   captureOriginal()
-  // Fresh PR (or sub-tab nav): reset the signal signature so the new page can
-  // re-poke, (re)start the long-lived mergebox observer, and arm the self-check.
-  lastSignature = null
-  selfCheckLogged = false
+  // Reset ALL per-PR signal state. Critical: a PR→PR soft-nav reaches register()
+  // WITHOUT going through teardownToOriginal() (see onNav), so without this a
+  // pending optimistic-paint revert timer or stale reconcile state from the
+  // previous PR would carry over and fire on this one. Then (re)start the
+  // long-lived mergebox observer and arm the self-check.
+  resetMergeboxSignal()
   startMergeboxObserver()
   scheduleSelfCheck()
   // Title prefix is independent of the token — apply it up front.
@@ -323,6 +325,7 @@ chrome.runtime.onMessage.addListener((message: FaviconCommand) => {
   } else if (message?.type === "restoreFavicon") {
     resetMergeboxSignal()
     restoreOriginal()
+    restoreTitle() // token cleared → leave no trace, including the "#N" prefix
   }
   // Box-select's messages (arm/disarm/…) have no branch here → ignored.
 })

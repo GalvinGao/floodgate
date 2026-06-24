@@ -61,14 +61,21 @@ describe("reconcile", () => {
     }
   })
 
-  it("a second optimisticTerminal keeps the original baseline (no self-clobber)", () => {
+  it("a second optimisticTerminal keeps the original baseline and re-arms the timer", () => {
     const optimisticBaseline: Baseline = { kind: "original" }
-    const { state } = reconcile(pending, {
+    const { state, command } = reconcile(pending, {
       type: "optimisticTerminal",
       terminal: "closed",
       baseline: optimisticBaseline // would be wrong to adopt — must keep original
     })
     expect(state).toEqual({ pending: true, baseline })
+    // Re-emits paint+start so the revert window resets to the new terminal flavor,
+    // rather than leaving the original (shorter) timer running.
+    expect(command).toEqual({
+      paint: "terminal",
+      terminal: "closed",
+      timer: "start"
+    })
   })
 
   it("reverts to the original favicon when there was no prior authoritative state", () => {

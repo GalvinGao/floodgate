@@ -1,4 +1,5 @@
-import type { PollTier } from "./poll-policy"
+import { pollTier, type PollTier } from "./poll-policy"
+import type { PrStatus } from "./pr-status"
 
 /**
  * Per-ref minimum spacing between signal-triggered fetches, by tier. Signals
@@ -38,4 +39,36 @@ export function signalFetchDue({
   if (tier === "stop") return false
   if (lastSignalFetchedAt === undefined) return true
   return now - lastSignalFetchedAt >= minIntervalMs
+}
+
+/** The fields of a registry entry the signal gate needs (a structural subset of RegistryEntry). */
+export interface SignalGateEntry {
+  status?: PrStatus
+  lastSignalFetchedAt?: number
+}
+
+/**
+ * Whether a signal fetch is due for a ref, given every registry entry that shares
+ * it (a signal fetch fans out to all the ref's tabs). Folds the per-tab entries
+ * into one decision: the tier comes from the ref's known status, and the floor is
+ * measured from the **most recent** signal fetch across the tabs (so a fetch on
+ * any tab counts for all of them — never the min, which would let a stale tab
+ * re-trigger). Pure, so this multi-tab reduction is unit-tested rather than living
+ * untested in the background wiring.
+ */
+export function signalRefreshDue(
+  entries: Iterable<SignalGateEntry>,
+  now: number
+): boolean {
+  let status: PrStatus | undefined
+  let lastSignalFetchedAt: number | undefined
+  for (const entry of entries) {
+    if (entry.status) status = entry.status
+    if (entry.lastSignalFetchedAt != null)
+      lastSignalFetchedAt = Math.max(
+        lastSignalFetchedAt ?? 0,
+        entry.lastSignalFetchedAt
+      )
+  }
+  return signalFetchDue({ tier: pollTier(status), lastSignalFetchedAt, now })
 }

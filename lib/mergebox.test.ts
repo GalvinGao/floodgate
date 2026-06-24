@@ -40,6 +40,24 @@ const OPEN = `
     <svg aria-label="3 checks passed" class="octicon octicon-check"></svg>
   </div>`
 
+// Wrapper icon carries the octicon class but NO aria-label → exercises the fallback.
+const MERGED_BY_CLASS = `
+  <div data-testid="mergebox-partial">
+    <div data-testid="mergeability-icon-wrapper">
+      <svg class="octicon octicon-git-merge"></svg>
+    </div>
+  </div>`
+
+// Open PR, but a status check elsewhere in the region is literally named "Merged".
+// The mergeability icon (the authoritative signal) says Open → must stay null.
+const FALSE_FRIEND = `
+  <div data-testid="mergebox-partial">
+    <div data-testid="mergeability-icon-wrapper">
+      <svg aria-label="Open" class="octicon octicon-git-pull-request"></svg>
+    </div>
+    <svg aria-label="Merged" class="octicon octicon-check"></svg>
+  </div>`
+
 // Only a hashed CSS-module class signals "merged" — no aria-label, no octicon class.
 const HASHED_ONLY = `
   <div data-testid="mergebox-partial">
@@ -64,8 +82,16 @@ describe("detectTerminalState", () => {
     expect(detectTerminalState(root(CLOSED))).toBe("closed")
   })
 
+  it("reads merged from the octicon class when the aria-label is absent", () => {
+    expect(detectTerminalState(root(MERGED_BY_CLASS))).toBe("merged")
+  })
+
   it("returns null for an open PR", () => {
     expect(detectTerminalState(root(OPEN))).toBeNull()
+  })
+
+  it("ignores a non-mergeability octicon named 'Merged' (no false positive)", () => {
+    expect(detectTerminalState(root(FALSE_FRIEND))).toBeNull()
   })
 
   it("returns null when the region is absent", () => {

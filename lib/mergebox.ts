@@ -20,22 +20,22 @@ export function findMergeboxRegion(root: ParentNode): Element | null {
 
 /** Read the lifecycle terminal state from a known mergebox region element. */
 function lifecycleFromRegion(region: Element): TerminalState | null {
-  // Primary: the mergeability status icon's aria-label reflects the lifecycle
-  // ("Merged" / "Closed" / "Open" / "Draft" / …). Authoritative and stable.
-  for (const icon of region.querySelectorAll(OCTICON_WITH_LABEL)) {
-    const label = icon.getAttribute("aria-label")?.trim().toLowerCase()
-    if (label === "merged") return "merged"
-    if (label === "closed") return "closed"
-  }
-  // Fallback: the Octicon class, but ONLY inside the dedicated mergeability icon
-  // wrapper, so a "Merge" button's git-merge octicon elsewhere can't false-positive.
-  const wrapper = region.querySelector(
-    "[data-testid='mergeability-icon-wrapper']"
-  )
-  const cls =
-    wrapper?.querySelector("[class~='octicon']")?.getAttribute("class") ?? ""
+  // The mergeability status icon — a single element in its own wrapper — is THE
+  // lifecycle signal. Scope strictly to that wrapper so an unrelated octicon in
+  // the mergebox (e.g. a status check whose display name happens to be "Merged"
+  // or "Closed") can't false-positive an open PR into a terminal paint.
+  const icon = region
+    .querySelector("[data-testid='mergeability-icon-wrapper']")
+    ?.querySelector("[class~='octicon']")
+  if (!icon) return null
+  // Primary: the icon's aria-label ("Merged" / "Closed" / "Open" / …). Stable.
+  const label = icon.getAttribute("aria-label")?.trim().toLowerCase()
+  if (label === "merged") return "merged"
+  if (label === "closed") return "closed"
+  // Fallback: the Octicon class, when GitHub drops the aria-label.
+  const cls = icon.getAttribute("class") ?? ""
   if (/\bocticon-git-merge\b/.test(cls)) return "merged"
-  if (/octicon-git-pull-request-closed/.test(cls)) return "closed"
+  if (/\bocticon-git-pull-request-closed\b/.test(cls)) return "closed"
   return null
 }
 

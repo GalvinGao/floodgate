@@ -11,8 +11,7 @@ import type {
   RegisterPrResponse
 } from "~lib/messages"
 import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
-import type { PrStatus } from "~lib/pr-status"
-import { signalFetchDue } from "~lib/refresh-gate"
+import { signalRefreshDue } from "~lib/refresh-gate"
 import { REGISTRY_KEY, type RegistryEntry } from "~lib/registry"
 import { openAndGroup, type TabGroupApi } from "~lib/tab-group"
 import { onPoll, onRegister, onVisibilityChange } from "~lib/unread"
@@ -351,33 +350,25 @@ async function requestRefresh({
   const token = await getToken()
   if (!token) return
 
-  // Synchronous critical section (no await below until the fetch) → the gate
-  // read, stamp, and in-flight add are atomic relative to other requestRefresh
-  // calls, so two near-simultaneous signals can't both pass the gate.
+  // Once getToken() resolves, everything below runs with no further await until
+  // fetchAndPushRef. The JS event loop runs each resumed continuation to its next
+  // await before another can run, so this has/gate/stamp/add sequence is atomic
+  // relative to other requestRefresh calls — two near-simultaneous signals for the
+  // same ref can't both pass: the first adds to inFlightSignalRefs before the
+  // second's continuation runs. (Keep this block await-free to preserve that.)
   const key = refKey(target)
   if (inFlightSignalRefs.has(key)) return
   const tabIds: number[] = []
-  let status: PrStatus | undefined
-  let lastSignal: number | undefined
+  const entries: RegistryEntry[] = []
   for (const [id, entry] of prRegistry) {
     if (refKey(entry.ref) !== key) continue
     tabIds.push(id)
-    if (entry.status) status = entry.status
-    if (entry.lastSignalFetchedAt != null)
-      lastSignal = Math.max(lastSignal ?? 0, entry.lastSignalFetchedAt)
+    entries.push(entry)
   }
   if (tabIds.length === 0) return // tab unregistered mid-flight
   const now = Date.now()
-  const due = signalFetchDue({
-    tier: pollTier(status),
-    lastSignalFetchedAt: lastSignal,
-    now
-  })
-  if (!due) return
-  for (const id of tabIds) {
-    const entry = prRegistry.get(id)
-    if (entry) entry.lastSignalFetchedAt = now
-  }
+  if (!signalRefreshDue(entries, now)) return
+  for (const entry of entries) entry.lastSignalFetchedAt = now
   persistRegistry() // mirror the stamp to storage.session so SW eviction can't reset it
   inFlightSignalRefs.add(key)
 
