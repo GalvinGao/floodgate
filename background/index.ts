@@ -1,6 +1,6 @@
 import { isArmableUrl } from "~lib/activation"
 import { fetchOpenPrs, fetchPrStatus } from "~lib/github-api"
-import { parsePrUrl, type PrRef } from "~lib/github-pr"
+import { isPrCommitUrl, parsePrUrl, type PrRef } from "~lib/github-pr"
 import type {
   AddWatchedRepoResponse,
   ContentRequest,
@@ -326,6 +326,10 @@ async function pollAll(force = false): Promise<void> {
  *
  * Dedup: if the same PR (owner/repo/number) is already pinned in this window,
  * close the new tab and focus the existing pinned one instead of pinning a second.
+ *
+ * A specific-commit view (…/pull/N/commits/<sha>) is exempt from both pinning and
+ * dedup: it's a different thing from the PR, so it opens as its own normal tab
+ * rather than merging into the PR's pinned tab.
  */
 async function maybeAutoPin(tabId: number): Promise<void> {
   if (autoPinAttempted.has(tabId) || groupOpenedTabs.has(tabId)) return
@@ -336,6 +340,8 @@ async function maybeAutoPin(tabId: number): Promise<void> {
   } catch {
     return // tab gone
   }
+  // A single-commit diff view is not the PR — leave it as a standalone tab.
+  if (tab.url && isPrCommitUrl(tab.url)) return
   // groupId === -1 is TAB_GROUP_ID_NONE (ungrouped). Pinned or grouped → leave it.
   if (tab.pinned || tab.groupId !== -1) return
 
@@ -605,7 +611,11 @@ async function pollWatchedRepos(token: string): Promise<void> {
   try {
     const tabs = await chrome.tabs.query({ url: "*://github.com/*/*/pull/*" })
     for (const t of tabs) {
-      const r = t.url ? parsePrUrl(t.url) : null
+      // A single-commit view (…/pull/N/commits/<sha>) is a different thing from the
+      // PR, so it doesn't count as the PR already being open (W7) — the PR can still
+      // auto-open alongside it.
+      if (!t.url || isPrCommitUrl(t.url)) continue
+      const r = parsePrUrl(t.url)
       if (r) openRefs.add(refKey(r))
     }
   } catch {

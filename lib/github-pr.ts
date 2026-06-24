@@ -24,3 +24,27 @@ export function parsePrUrl(url: string): PrRef | null {
   if (!match) return null
   return { owner: match[1], repo: match[2], number: Number(match[3]) }
 }
+
+// /{owner}/{repo}/pull/{number}/commits/{sha} — a single commit's diff *within* a
+// PR. The commits-list subtab (/pull/N/commits, no sha) is NOT this; only a
+// specific commit is. SHA is matched as a 7–40 char hex string (abbreviated or full).
+const PR_COMMIT_PATH =
+  /^\/[^/]+\/[^/]+\/pull\/\d+\/commits\/[0-9a-f]{7,40}(?:\/|$)/i
+
+/**
+ * Whether `url` points at a *specific commit* inside a PR (…/pull/N/commits/<sha>),
+ * as opposed to the PR itself or its files/commits/checks subtabs. `parsePrUrl`
+ * intentionally collapses every subtab onto the same ref, but a single-commit view
+ * is a different thing from the PR — callers use this to exclude it from the
+ * auto-pin dedup so it opens as its own tab instead of merging into the PR's tab.
+ */
+export function isPrCommitUrl(url: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.hostname !== "github.com") return false
+  return PR_COMMIT_PATH.test(parsed.pathname)
+}
