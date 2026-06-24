@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest"
 
-import { fetchOpenPrs, fetchPrStatus, validateToken } from "./github-api"
+import {
+  fetchOpenPrs,
+  fetchPrStatus,
+  githubGraphQL,
+  validateToken
+} from "./github-api"
 
 function mockFetch(opts: {
   status?: number
@@ -22,6 +27,41 @@ function mockFetch(opts: {
     } as unknown as Response
   })
 }
+
+describe("githubGraphQL request timeout", () => {
+  it("passes an abort signal to fetch", async () => {
+    let init: RequestInit | undefined
+    const f = vi.fn(async (_url: string, i: RequestInit) => {
+      init = i
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ data: {} })
+      } as unknown as Response
+    })
+    await githubGraphQL(f as unknown as typeof fetch, "t", "query { x }")
+    expect(init?.signal).toBeInstanceOf(AbortSignal)
+  })
+
+  it("aborts (rejects) a request that hangs past the timeout", async () => {
+    // A fetch that never resolves on its own but honors the abort signal — the
+    // real GitHub-stall case. With a tiny timeout the AbortSignal fires quickly.
+    const hanging = vi.fn(
+      (_url: string, i: RequestInit) =>
+        new Promise<Response>((_resolve, reject) => {
+          i.signal?.addEventListener("abort", () =>
+            reject((i.signal as AbortSignal).reason)
+          )
+        })
+    )
+    await expect(
+      githubGraphQL(hanging as unknown as typeof fetch, "t", "q", undefined, 10)
+    ).rejects.toBeTruthy()
+    // The thrown abort is what callers convert to a typed "network" error
+    // (covered by the throw → network cases below), so the in-flight guard clears.
+  })
+})
 
 describe("validateToken", () => {
   it("empty token → not ok, no fetch", async () => {

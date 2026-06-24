@@ -14,12 +14,23 @@ export interface GraphQLResult<T> {
   scopes: string | null // X-OAuth-Scopes header (present on classic tokens)
 }
 
+/**
+ * Hard ceiling on a single GraphQL request. Without it a stalled GitHub API
+ * could leave a fetch hanging indefinitely — and since callers gate on an
+ * in-flight set / poll cadence, one hung request can wedge a PR's refresh path
+ * until the service worker is evicted. On timeout the request aborts and
+ * rejects, which every caller already maps to a typed "network" error and
+ * retries on the next tick.
+ */
+export const GRAPHQL_TIMEOUT_MS = 20_000
+
 /** Single GitHub GraphQL entry point — endpoint is hard-coded (never page-supplied). */
 export async function githubGraphQL<T>(
   fetchFn: FetchFn,
   token: string,
   query: string,
-  variables?: Record<string, unknown>
+  variables?: Record<string, unknown>,
+  timeoutMs: number = GRAPHQL_TIMEOUT_MS
 ): Promise<GraphQLResult<T>> {
   const res = await fetchFn(ENDPOINT, {
     method: "POST",
@@ -27,7 +38,8 @@ export async function githubGraphQL<T>(
       Authorization: `Bearer ${token}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ query, variables })
+    body: JSON.stringify({ query, variables }),
+    signal: AbortSignal.timeout(timeoutMs)
   })
   let json: { data?: T; errors?: { type?: string; message: string }[] } = {}
   try {
