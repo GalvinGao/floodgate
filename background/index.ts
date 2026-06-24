@@ -30,7 +30,8 @@ import {
 // to lose on SW idle — re-arming is one click, and createTabGroup is self-contained.
 let armedTabId: number | null = null
 
-// PR tabs are auto-pinned on open. Two in-memory sets gate that:
+// PR tabs are auto-pinned on open when the user has opted in (AUTO_PIN_KEY).
+// Two in-memory sets gate that:
 //  • groupOpenedTabs — tabs opened (or led) into a tab group; never auto-pinned.
 //  • autoPinAttempted — tabs already evaluated once, so a manual unpin sticks.
 const groupOpenedTabs = new Set<number>()
@@ -175,6 +176,9 @@ chrome.runtime.onMessage.addListener(
 // ============================================================================
 
 const TOKEN_KEY = "prFavicon.token"
+// Auto-pin opt-in. Absent (the default) means OFF — PR tabs are never auto-pinned
+// unless the user enables it in Options. Only `=== true` turns it on.
+const AUTO_PIN_KEY = "prFavicon.autoPin"
 const POLL_ALARM = "pr-poll"
 
 // tabId -> entry. Mirrored to chrome.storage.session so it survives SW eviction.
@@ -201,6 +205,11 @@ async function getToken(): Promise<string | null> {
   const stored = await chrome.storage.local.get(TOKEN_KEY)
   const token = stored[TOKEN_KEY]
   return typeof token === "string" && token.trim() ? token.trim() : null
+}
+
+async function getAutoPin(): Promise<boolean> {
+  const stored = await chrome.storage.local.get(AUTO_PIN_KEY)
+  return stored[AUTO_PIN_KEY] === true
 }
 
 function refKey(ref: PrRef): string {
@@ -333,6 +342,9 @@ async function pollAll(force = false): Promise<void> {
  */
 async function maybeAutoPin(tabId: number): Promise<void> {
   if (autoPinAttempted.has(tabId) || groupOpenedTabs.has(tabId)) return
+  // Opt-in, default off. Checked before marking attempted so toggling it on later
+  // still pins PR tabs opened thereafter (the disabled pass leaves no mark).
+  if (!(await getAutoPin())) return
   autoPinAttempted.add(tabId) // mark before await: no re-entrant double-pin
   let tab: chrome.tabs.Tab
   try {
@@ -373,7 +385,7 @@ async function handleRegisterPr(
   tabId: number,
   visible: boolean
 ): Promise<RegisterPrResponse> {
-  void maybeAutoPin(tabId) // pin PR tabs on open (independent of token)
+  void maybeAutoPin(tabId) // pin PR tabs on open if opted in (independent of token)
   // Always register (so a later tokenChanged can reach this tab) with the
   // reported visibility; the unread baseline is seeded on the first fetch.
   prRegistry.set(tabId, { ref, visible, unread: false })
