@@ -336,7 +336,7 @@ const inFlightSignalRefs = new Set<string>()
  * persisted per-ref min-interval + tier (signals bypass the fast/slow throttle
  * but not the floor, and never fetch stop-tier refs), dedups in-flight, then
  * reuses fetchAndPushRef to fetch once and fan out to every tab showing the ref.
- * No-ops without a token, mirroring pollAll — the alarm path (R12) is untouched.
+ * No-ops without a token, mirroring pollAll — the alarm path is untouched.
  */
 async function requestRefresh({
   ref,
@@ -487,7 +487,7 @@ function handleVisibility(tabId: number, visible: boolean): void {
     pushToTab(tabId, { type: "prStatus", status: entry.status, unread: false })
   }
   // Now-visible tab: re-poll so it reflects current status instead of waiting
-  // for the next alarm tick (R8). Gated by the per-ref signal min-interval and
+  // for the next alarm tick. Gated by the per-ref signal min-interval and
   // token inside requestRefresh; cross-PR bursts are naturally user-paced.
   if (visible) void requestRefresh({ tabId })
 }

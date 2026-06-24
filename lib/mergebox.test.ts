@@ -98,7 +98,7 @@ describe("detectTerminalState", () => {
     expect(detectTerminalState(root(NO_REGION))).toBeNull()
   })
 
-  it("does NOT infer state from hashed CSS-module class names (R7)", () => {
+  it("does NOT infer state from hashed CSS-module class names", () => {
     expect(detectTerminalState(root(HASHED_ONLY))).toBeNull()
   })
 })
@@ -125,7 +125,7 @@ describe("mergeboxSignature", () => {
     expect(passing).not.toBe(failing)
   })
 
-  it("ignores streaming content that isn't a status icon or the heading (R4)", () => {
+  it("ignores streaming content that isn't a status icon or the heading", () => {
     const before = mergeboxSignature(root(OPEN))
     const withLog = mergeboxSignature(
       root(

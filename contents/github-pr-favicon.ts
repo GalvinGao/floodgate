@@ -242,7 +242,7 @@ function startMergeboxObserver(): void {
   mergeboxObserver.observe(target, { childList: true, subtree: true })
 }
 
-/** R11: if a PR page never shows a detectable mergebox, log once so the silent
+/** If a PR page never shows a detectable mergebox, log once so the silent
  * fallback to poll-only is observable rather than looking like a slow favicon. */
 function scheduleSelfCheck(): void {
   window.clearTimeout(selfCheckTimer)

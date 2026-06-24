@@ -3,7 +3,7 @@
  * content script's signal observer (lib has no DOM at runtime, but jsdom lets
  * these be unit-tested against the real markup).
  *
- * Robustness rule (R7): match only GitHub's *stable* hooks —
+ * Robustness rule: match only GitHub's *stable* hooks —
  * `data-testid="mergebox-partial"`, the mergeability icon's `aria-label`, and the
  * Octicon class — never the content-hashed CSS-module class names
  * (`MergeBox-module__…`), which rotate on every GitHub deploy.

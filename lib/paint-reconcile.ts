@@ -2,7 +2,7 @@ import type { TerminalState } from "./mergebox"
 import type { PrStatus } from "./pr-status"
 
 /**
- * Pure state machine for the optimistic terminal-paint lifecycle (R6).
+ * Pure state machine for the optimistic terminal-paint lifecycle.
  *
  * The content script optimistically paints a merged/closed favicon the instant
  * the DOM shows it, then a confirming fetch lands. This reducer owns the bit the
