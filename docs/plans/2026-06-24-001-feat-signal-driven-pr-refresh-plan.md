@@ -1,7 +1,7 @@
 ---
 title: "feat: Signal-driven PR status refresh"
 type: feat
-status: active
+status: completed
 date: 2026-06-24
 deepened: 2026-06-24
 origin: docs/brainstorms/2026-06-24-signal-driven-pr-refresh-requirements.md
@@ -271,7 +271,7 @@ flowchart LR
 
 ## Implementation Units
 
-- [ ] **Unit 1: Persisted signal timestamp + pure refresh gate**
+- [x] **Unit 1: Persisted signal timestamp + pure refresh gate**
 
 **Goal:** Add the per-ref signal-fetch timestamp and the pure decision that
 gates signal-triggered fetches.
@@ -303,7 +303,7 @@ gate only on the elapsed tier-aware interval.
 
 **Verification:** `pnpm test` + `pnpm typecheck` pass.
 
-- [ ] **Unit 2: `requestRefresh` entry point (gate + in-flight dedup)**
+- [x] **Unit 2: `requestRefresh` entry point (gate + in-flight dedup)**
 
 **Goal:** A single signal-refresh entry point that gates, dedups in-flight,
 stamps + persists `lastSignalFetchedAt`, and fans out via the existing fetch
@@ -349,7 +349,7 @@ for that ref _while the first fetch is still in flight_ → dropped (no second
 request); after 10 s a fresh signal fetches; no token → no fetch; a signal for a
 tab with no registry entry → no throw, no fetch.
 
-- [ ] **Unit 3: Pure mergebox DOM module (detect + signature)**
+- [x] **Unit 3: Pure mergebox DOM module (detect + signature)**
 
 **Goal:** Locate the mergebox, detect the terminal state, and compute a cheap
 change-signature — all from stable hooks, fully unit-tested.
@@ -386,7 +386,7 @@ from the origin doc is the primary fixture.
 
 **Verification:** `pnpm test` passes against the real pasted fragment.
 
-- [ ] **Unit 4: DOM-mutation poke signal (stable-ancestor observer) + self-check**
+- [x] **Unit 4: DOM-mutation poke signal (stable-ancestor observer) + self-check**
 
 **Goal:** Observe a stable ancestor on the live tab, poke the entry point only
 when the mergebox signature changes, and surface silent degradation.
@@ -424,7 +424,7 @@ yields **no** pokes (signature unchanged); on a PR with no detectable mergebox t
 self-check logs once after the settle delay and the extension still works on the
 poll cadence.
 
-- [ ] **Unit 5: Visibility re-poll**
+- [x] **Unit 5: Visibility re-poll**
 
 **Goal:** When a hidden PR tab becomes visible, refresh it through the entry
 point instead of waiting for the next alarm tick.
@@ -451,7 +451,7 @@ covered in Unit 1). Verified manually.
 alarm tick, focus the tab → favicon updates promptly on focus; rapidly toggling
 focus on the same tab does not exceed one fetch per the min-interval.
 
-- [ ] **Unit 6: Optimistic terminal paint + pure reconcile state machine**
+- [x] **Unit 6: Optimistic terminal paint + pure reconcile state machine**
 
 **Goal:** Paint merged/closed instantly on the live tab and reconcile every
 outcome through a tested pure reducer, so a wrong/stale paint can never strand.
