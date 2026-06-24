@@ -65,6 +65,7 @@ export function mergeboxSignature(root: ParentNode): string {
     .filter(Boolean)
     .sort()
   // The summary heading captures state GitHub renders as prose rather than an icon.
-  const heading = region.querySelector("h3")?.textContent?.trim().slice(0, 120) ?? ""
+  const heading =
+    region.querySelector("h3")?.textContent?.trim().slice(0, 120) ?? ""
   return `${terminal}|${labels.join(",")}|${heading}`
 }

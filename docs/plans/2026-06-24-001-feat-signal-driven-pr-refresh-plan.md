@@ -17,7 +17,7 @@ min on the slow tier). This plan adds two fast **signals** — a DOM-mutation po
 from the live PR page and a re-poll when a hidden tab becomes visible — funneled
 through a single background-side refresh entry point, plus an optimistic
 favicon paint for the unambiguous merged/closed transition. The GraphQL API
-stays the source of truth; signals decide *when* to fetch, not *what* the status
+stays the source of truth; signals decide _when_ to fetch, not _what_ the status
 is (the one exception is the optimistic terminal paint, which is reconciled by a
 confirming fetch).
 
@@ -43,7 +43,7 @@ review/check changes; the instant terminal paint is polish on top.
 
 - R1. A single background-side entry point for **signal-triggered** refreshes
   (DOM poke + visibility), instead of scattered direct fetch calls. (`tokenChanged`
-  and the alarm tick are deliberately *not* routed through it — see Key Decisions.)
+  and the alarm tick are deliberately _not_ routed through it — see Key Decisions.)
 - R2. The entry point enforces a per-ref minimum interval between signal fetches
   **and** drops a signal whose ref already has a fetch in flight (in-flight
   dedup), then fans out one result to all tabs showing that ref.
@@ -101,8 +101,8 @@ review/check changes; the instant terminal paint is polish on top.
   latch; **no in-flight dedup of its own**), `reconcilePollAlarm`,
   `handleVisibility` (latch bookkeeping only, never re-polls; `if (!entry) return`
   guard is the pattern for the missing-entry case), `prRegistry` (keyed by tabId)
-  + `persistRegistry` (fire-and-forget mirror to `chrome.storage.session`), the
-  `delay(150)` intra-tick stagger.
+  - `persistRegistry` (fire-and-forget mirror to `chrome.storage.session`), the
+    `delay(150)` intra-tick stagger.
 - `lib/poll-policy.ts` — `pollTier` (fast/slow/stop; `pollTier(undefined)` ⇒
   `fast`) and `isPollDue`; the model for the new pure gate.
 - `lib/registry.ts` — `RegistryEntry` (gets the new `lastSignalFetchedAt` field).
@@ -131,13 +131,13 @@ review/check changes; the instant terminal paint is polish on top.
 
 ### Test Convention
 
-- `vitest.config.ts` includes **only `lib/**/*.test.ts`** and runs in **jsdom**.
-  Pure logic lives in `lib/` and is unit-tested (`lib/poll-policy.test.ts` is the
-  model); `background/index.ts` and `contents/*.ts` are wiring, verified manually.
-  This plan therefore extracts **all three** pieces of risk-bearing logic into
-  pure `lib/` modules — the gate decision (Unit 1), the DOM detection + signature
+- `vitest.config.ts` includes **only `lib/**/_.test.ts`** and runs in **jsdom**.
+Pure logic lives in `lib/` and is unit-tested (`lib/poll-policy.test.ts`is the
+model);`background/index.ts`and`contents/_.ts`are wiring, verified manually.
+This plan therefore extracts **all three** pieces of risk-bearing logic into
+pure`lib/` modules — the gate decision (Unit 1), the DOM detection + signature
   (Unit 3), and the optimistic-paint reconcile state machine (Unit 6) — so the
-  novel logic is unit-tested and only thin chrome.* glue is manual.
+  novel logic is unit-tested and only thin chrome.\* glue is manual.
 
 ## Key Technical Decisions
 
@@ -157,7 +157,7 @@ review/check changes; the instant terminal paint is polish on top.
   `fetchAndPushRef` + the new gate + the in-flight set. `pollAll` keeps its
   tier-based due-selection; `tokenChanged` keeps its current `pollAll(true)`
   force-refresh (it must bypass the min-interval, and the alarm path is the right
-  home for it). R1 is therefore scoped to *signal-triggered* refreshes — stated,
+  home for it). R1 is therefore scoped to _signal-triggered_ refreshes — stated,
   not hidden.
 - **Signals bypass tier throttle but not the min-interval, and are suppressed at
   `stop`**: merged/closed are absorbing — once a ref is known terminal, further
@@ -167,7 +167,7 @@ review/check changes; the instant terminal paint is polish on top.
 - **Tier-aware min-interval**: 10 s fast / 30 s slow.
 - **Observer attaches to a stable ancestor, decoupled from ref-change**: the
   mergebox lives in the Turbo-swapped content region, and `register()`/`teardown`
-  only re-run on *ref* change (same-PR sub-tab swaps keep the ref), so mirroring
+  only re-run on _ref_ change (same-PR sub-tab swaps keep the ref), so mirroring
   the head/title observers would leave the observer watching a detached node. The
   mergebox observer instead attaches once to a stable ancestor with
   `subtree: true` and re-resolves `findMergeboxRegion` inside its (debounced)
@@ -175,7 +175,7 @@ review/check changes; the instant terminal paint is polish on top.
   when a cheap **signature** of the region (terminal state + review/check summary
   aria-labels) changes, so a chatty page (CI logs, comments) doesn't poke.
 - **Reconcile is a pure state machine; the optimistic paint is client-only**: the
-  content script snapshots the pre-paint `(status, unread)` baseline *before*
+  content script snapshots the pre-paint `(status, unread)` baseline _before_
   painting (because `drawStatus` overwrites `lastStatus`), paints merged/closed,
   and starts a bounded timer. The reconcile reducer (pure, in `lib/`) consumes
   events — `authoritativePush` / `error` / `timeout` — and returns the paint
@@ -190,20 +190,20 @@ review/check changes; the instant terminal paint is polish on top.
 
 ### Resolved During Planning
 
-- *Per-ref timestamp field?* → new `lastSignalFetchedAt`, persisted.
-- *R2 coalescing?* → per-ref min-interval + in-flight `Set<refKey>` dedup; do not
+- _Per-ref timestamp field?_ → new `lastSignalFetchedAt`, persisted.
+- _R2 coalescing?_ → per-ref min-interval + in-flight `Set<refKey>` dedup; do not
   assume `fetchAndPushRef` coalesces concurrent calls (it doesn't).
-- *Debounce / min-interval values?* → 300 ms debounce; 10 s/30 s tier-aware floor.
-- *Signals bypass the `stop` tier?* → no, suppressed at `stop`. First-signal on
+- _Debounce / min-interval values?_ → 300 ms debounce; 10 s/30 s tier-aware floor.
+- _Signals bypass the `stop` tier?_ → no, suppressed at `stop`. First-signal on
   undefined status → intended fetch.
-- *R8 message reuse vs new?* → extend the existing `visibility` path; token-gated.
-- *Optimistic paint reconcile?* → pure reducer; snapshot baseline before paint;
+- _R8 message reuse vs new?_ → extend the existing `visibility` path; token-gated.
+- _Optimistic paint reconcile?_ → pure reducer; snapshot baseline before paint;
   any push cancels the timer; error/timeout revert to baseline (or original
   favicon if no prior authoritative state).
-- *Observer lifecycle vs the existing head observer?* → stable-ancestor observer
+- _Observer lifecycle vs the existing head observer?_ → stable-ancestor observer
   with in-callback re-resolution, decoupled from ref-change (the head/title
   pattern doesn't transfer because the mergebox node is swapped).
-- *`tokenChanged` routed through the entry point?* → no; it stays `pollAll(true)`
+- _`tokenChanged` routed through the entry point?_ → no; it stays `pollAll(true)`
   as a force-refresh outside the min-interval. R1 scoped to signals.
 
 ### Deferred to Implementation
@@ -218,7 +218,7 @@ review/check changes; the instant terminal paint is polish on top.
 
 ## High-Level Technical Design
 
-> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
+> _This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce._
 
 Pure gate decision (Unit 1):
 
@@ -281,6 +281,7 @@ gates signal-triggered fetches.
 **Dependencies:** None
 
 **Files:**
+
 - Modify: `lib/registry.ts` (add `lastSignalFetchedAt?: number`, doc-commented as distinct from `lastPolledAt`)
 - Create: `lib/refresh-gate.ts` (`signalMinIntervalMs(tier)`, `signalFetchDue({ tier, lastSignalFetchedAt, now })`)
 - Create: `lib/refresh-gate.test.ts`
@@ -293,6 +294,7 @@ gate only on the elapsed tier-aware interval.
 `lib/poll-policy.test.ts` table style).
 
 **Test scenarios:**
+
 - Happy path: `lastSignalFetchedAt` undefined, fast tier → due (covers first-signal-on-undefined).
 - Edge case: fetched 9.9 s ago fast → not due; 10 s ago → due.
 - Edge case: slow tier honors 30 s (29 s → not due, 30 s → due).
@@ -312,9 +314,11 @@ helper.
 **Dependencies:** Unit 1
 
 **Files:**
+
 - Modify: `background/index.ts` (`requestRefresh({ ref?, tabId? })`)
 
 **Approach:**
+
 - Resolve the target ref: if `tabId` given, `prRegistry.get(tabId)?.ref`; if
   `ref` given, use it. **Early-return when there is no registry entry for the
   ref/tabId** (mirrors `handleVisibility`'s `if (!entry) return`). `ref` wins if
@@ -326,7 +330,7 @@ helper.
   `signalFetchDue(pollTier(entry.status), entry.lastSignalFetchedAt, now)`; if
   not due → drop. If due: add refKey to the set, stamp
   `entry.lastSignalFetchedAt = Date.now()`, `persistRegistry()`, `await
-  fetchAndPushRef(ref, tabIdsForRef, token)`, and remove the refKey in a
+fetchAndPushRef(ref, tabIdsForRef, token)`, and remove the refKey in a
   `finally`.
 - Leave `pollAll`, `reconcilePollAlarm`, and `tokenChanged → pollAll(true)`
   unchanged.
@@ -341,7 +345,7 @@ manually (below).
 
 **Verification:** With a token + open PR tab: two signals for the same ref within
 10 s → exactly one network fetch (service-worker Network panel); a second signal
-for that ref *while the first fetch is still in flight* → dropped (no second
+for that ref _while the first fetch is still in flight_ → dropped (no second
 request); after 10 s a fresh signal fetches; no token → no fetch; a signal for a
 tab with no registry entry → no throw, no fetch.
 
@@ -355,10 +359,12 @@ change-signature — all from stable hooks, fully unit-tested.
 **Dependencies:** None
 
 **Files:**
+
 - Create: `lib/mergebox.ts` (`findMergeboxRegion(root)`, `detectTerminalState(root) → "merged"|"closed"|null`, `mergeboxSignature(root) → string`)
 - Create: `lib/mergebox.test.ts`
 
 **Approach:**
+
 - `findMergeboxRegion` anchors on `[data-testid="mergebox-partial"]`.
 - `detectTerminalState` reads `aria-label="Merged"`/`"Closed"` + Octicon class
   (`octicon-git-merge` / closed-PR icon); never matches `MergeBox-module__…`.
@@ -370,6 +376,7 @@ change-signature — all from stable hooks, fully unit-tested.
 from the origin doc is the primary fixture.
 
 **Test scenarios:**
+
 - Happy path: merged fragment → `detectTerminalState` = `"merged"`; `findMergeboxRegion` returns the partial.
 - Happy path: closed fragment (`aria-label="Closed"` + closed Octicon) → `"closed"`.
 - Edge case: open mergebox (no terminal aria-label) → `null`.
@@ -389,11 +396,13 @@ when the mergebox signature changes, and surface silent degradation.
 **Dependencies:** Unit 2, Unit 3
 
 **Files:**
+
 - Modify: `lib/messages.ts` (add `PrDomSignal = { type: "prDomSignal"; ref: PrRef }` to `FaviconRequest`)
 - Modify: `contents/github-pr-favicon.ts` (add a long-lived mergebox `MutationObserver` on a stable ancestor with `{ childList: true, subtree: true }`, started once on content-script init and disconnected on `pagehide`; 300 ms trailing debounce → re-resolve region, compute `mergeboxSignature`, and `sendMessage({ type: "prDomSignal", ref })` only when the signature changed since the last poke; self-check: after a settle delay, if `findMergeboxRegion` is still null on a PR URL, `console.debug` once; also log if the previously-found region is now detached)
 - Modify: `background/index.ts` (handle `prDomSignal` → `requestRefresh({ ref })`)
 
 **Approach:**
+
 - The observer is **not** gated on ref-change; it lives on a stable ancestor and
   re-resolves the region each fire, so same-PR sub-tab swaps and late-rendered
   mergeboxes keep working (R5). Signature-diff gating keeps a chatty page quiet
@@ -425,6 +434,7 @@ point instead of waiting for the next alarm tick.
 **Dependencies:** Unit 2
 
 **Files:**
+
 - Modify: `background/index.ts` (`handleVisibility`: when `visible === true`, after the existing latch bookkeeping, call `requestRefresh({ tabId })`)
 
 **Approach:** Extend the existing `visibility` message path — no new message type.
@@ -451,11 +461,13 @@ outcome through a tested pure reducer, so a wrong/stale paint can never strand.
 **Dependencies:** Unit 3, Unit 4
 
 **Files:**
+
 - Create: `lib/paint-reconcile.ts` (pure reducer: state `{ pending, baseline }`; events `optimisticTerminal` / `authoritativePush` / `error` / `timeout`; returns `{ nextState, command }` where command is a paint instruction + timer start/cancel)
 - Create: `lib/paint-reconcile.test.ts`
 - Modify: `contents/github-pr-favicon.ts` (in the observer callback, run `detectTerminalState`; on a terminal result, **snapshot** the pre-paint `(lastStatus, lastUnread)` baseline first, drive the reducer's `optimisticTerminal` event → paint + start a bounded timer, then send `prDomSignal`; route incoming `prStatus`/`prError`/timeout through the reducer; extend the `prError` handler so it actively reverts when a paint is pending instead of its current `if (!lastDataUri)` no-op)
 
 **Approach:**
+
 - Client-only paint; `fetchAndPushRef` owns the registry + latch. Any `prStatus`
   or `prError` for the ref cancels the timer; `prStatus` repaints authoritative
   (agree ⇒ no flicker, disagree ⇒ corrected); `error`/`timeout` revert to the
@@ -468,6 +480,7 @@ outcome through a tested pure reducer, so a wrong/stale paint can never strand.
 `reportVisibility` is the precedent for client-side optimistic paint.
 
 **Test scenarios (pure reducer — the risk-bearing logic):**
+
 - Happy path: `optimisticTerminal("merged", baseline)` while idle → command paints merged, starts timer, state pending.
 - Happy path (agree): then `authoritativePush(mergedStatus)` → paints authoritative, cancels timer, state idle (no revert possible afterward).
 - Error path (disagree): `optimisticTerminal("merged")` then `authoritativePush(openStatus)` → paints open (corrected), cancels timer.
@@ -500,7 +513,7 @@ reverts the favicon to open (disagree path).
 - **API surface parity:** no external API surface; one internal message type
   added to `FaviconRequest`.
 - **Integration coverage:** the three risk-bearing seams (gate, DOM detect +
-  signature, reconcile reducer) are pure and unit-tested; the chrome.* glue
+  signature, reconcile reducer) are pure and unit-tested; the chrome.\* glue
   (`requestRefresh`, the observer, the `prStatus`/`prError`/timeout dispatch to
   the reducer) is the only manually-verified part.
 - **Unchanged invariants:** the favicon visual model, unread-latch semantics
@@ -509,16 +522,16 @@ reverts the favicon to open (disagree path).
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| `prError` historically a no-op once a favicon is drawn → optimistic paint strands | Reducer + extended `prError` handler actively revert when a paint is pending; covered by `lib/paint-reconcile.test.ts` |
-| Optimistic paint clobbers its own revert baseline (`drawStatus` sets `lastStatus`) | Snapshot the pre-paint baseline before painting; reducer reverts to the snapshot, not to `lastStatus` |
-| Revert timer fires after a correct confirm → flicker | Any `prStatus`/`prError` for the ref cancels the timer; "no-confirm" means timer elapsed with no push seen |
-| Observer dies on sub-tab swap (mergebox node replaced; `register` only re-runs on ref change) | Attach to a stable ancestor with `subtree:true`, re-resolve region in-callback; not gated on ref-change |
-| R2 double-fetch (no in-flight dedup in `fetchAndPushRef`) | Explicit in-flight `Set<refKey>` in `requestRefresh` |
-| GitHub rotates mergebox `data-testid`/`aria-label`/Octicon hooks | Detection isolated in `lib/mergebox.ts`; R11 self-check (settle-delay + detached-target) logs the silent fallback; poll keeps working |
-| Chatty page floods pokes | Signature-diff gating (poke only on a meaningful summary change) + 300 ms debounce + per-ref min-interval |
-| SW eviction resets the rate guard | `lastSignalFetchedAt` persisted to `chrome.storage.session`, read before fetching |
+| Risk                                                                                          | Mitigation                                                                                                                            |
+| --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `prError` historically a no-op once a favicon is drawn → optimistic paint strands             | Reducer + extended `prError` handler actively revert when a paint is pending; covered by `lib/paint-reconcile.test.ts`                |
+| Optimistic paint clobbers its own revert baseline (`drawStatus` sets `lastStatus`)            | Snapshot the pre-paint baseline before painting; reducer reverts to the snapshot, not to `lastStatus`                                 |
+| Revert timer fires after a correct confirm → flicker                                          | Any `prStatus`/`prError` for the ref cancels the timer; "no-confirm" means timer elapsed with no push seen                            |
+| Observer dies on sub-tab swap (mergebox node replaced; `register` only re-runs on ref change) | Attach to a stable ancestor with `subtree:true`, re-resolve region in-callback; not gated on ref-change                               |
+| R2 double-fetch (no in-flight dedup in `fetchAndPushRef`)                                     | Explicit in-flight `Set<refKey>` in `requestRefresh`                                                                                  |
+| GitHub rotates mergebox `data-testid`/`aria-label`/Octicon hooks                              | Detection isolated in `lib/mergebox.ts`; R11 self-check (settle-delay + detached-target) logs the silent fallback; poll keeps working |
+| Chatty page floods pokes                                                                      | Signature-diff gating (poke only on a meaningful summary change) + 300 ms debounce + per-ref min-interval                             |
+| SW eviction resets the rate guard                                                             | `lastSignalFetchedAt` persisted to `chrome.storage.session`, read before fetching                                                     |
 
 ## Documentation / Operational Notes
 

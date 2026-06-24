@@ -21,7 +21,7 @@ already runs a `MutationObserver` on that page, but it only uses it to defend
 its own favicon against GitHub's overwrites ([github-pr-favicon.ts:37](../../contents/github-pr-favicon.ts)).
 It ignores the mergebox, review, and checks DOM entirely.
 
-Worse, two existing "signals" that *could* drive a fast refresh don't:
+Worse, two existing "signals" that _could_ drive a fast refresh don't:
 `visibilitychange` is reported to the background but only updates unread-latch
 bookkeeping — it never re-polls the now-visible tab ([background/index.ts:404](../../background/index.ts)).
 Triggers are scattered across the codebase (alarm listener, `tokenChanged`
@@ -35,7 +35,7 @@ justification is that present-day pain (every new trigger hand-wires into
 
 A caveat worth stating plainly: the ~60s active-tab lag is a self-observed
 annoyance, not a reported pain, and there is an inversion — the favicon matters
-most for tabs the user is *not* looking at, while a DOM signal only fires on the
+most for tabs the user is _not_ looking at, while a DOM signal only fires on the
 attended tab, where the page already shows the truth. So the active-tab terminal
 paint is partly polish. The durable correctness wins are the **visibility
 re-poll** (a stale background tab becomes current the instant it's focused) and
@@ -128,8 +128,8 @@ flowchart LR
   bookkeeping), so a focused tab shows current status instead of waiting for the
   next alarm tick.
 - R9. The visibility re-poll is gated by the same per-ref min-interval (R10);
-  re-visiting the *same* tab within the interval cannot re-fetch. Note this
-  per-ref gate does **not** bound the aggregate across *distinct* PRs: cycling N
+  re-visiting the _same_ tab within the interval cannot re-fetch. Note this
+  per-ref gate does **not** bound the aggregate across _distinct_ PRs: cycling N
   pinned PR tabs fires up to N fetches in a burst. A short global debounce (or
   "fetch on settle, not on every transition") bounds that burst — see R10.
 
@@ -181,7 +181,7 @@ flowchart LR
 - **Not** a replacement for the central alarm poll; background/discarded tabs
   stay poll-covered (R12).
 - **Not** tapping GitHub's live-updates SSE / socket channel, nor `webRequest`
-  interception of GitHub's own API traffic — noted as possible *future* signals
+  interception of GitHub's own API traffic — noted as possible _future_ signals
   the coordinator could accept, explicitly out of scope here.
 - **Not** changing the favicon visual model, the unread-latch semantics, the
   watched-repos feature, or box-select.
@@ -207,7 +207,7 @@ flowchart LR
   rate-limit awareness, and the by-ref fan-out — the only place that can gate and
   coalesce fetches across all tabs.
 - **Signals force fetches past the tier guard but never past the min-interval:**
-  tier logic exists to throttle *blind* polling; a signal is evidence of an
+  tier logic exists to throttle _blind_ polling; a signal is evidence of an
   actual change, so it should win against the tier but still respect the
   rate-limit floor.
 

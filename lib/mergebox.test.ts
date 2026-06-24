@@ -83,7 +83,9 @@ describe("mergeboxSignature", () => {
   })
 
   it("is stable for identical input and differs across lifecycle states", () => {
-    expect(mergeboxSignature(root(MERGED))).toBe(mergeboxSignature(root(MERGED)))
+    expect(mergeboxSignature(root(MERGED))).toBe(
+      mergeboxSignature(root(MERGED))
+    )
     expect(mergeboxSignature(root(MERGED))).not.toBe(
       mergeboxSignature(root(OPEN))
     )
