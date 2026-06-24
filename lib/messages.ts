@@ -27,6 +27,12 @@ export type RegisterPr = { type: "registerPr"; ref: PrRef; visible: boolean }
 export type UnregisterPr = { type: "unregisterPr" }
 /** Content → background: this tab's Page-Visibility state changed. */
 export type VisibilityChanged = { type: "visibility"; visible: boolean }
+/**
+ * Content → background: the live PR page's mergebox/review/check summary changed
+ * (a fast "this PR may have changed" poke). Carries no parsed status — it only
+ * asks the coordinator to refresh, which then fetches the authoritative status.
+ */
+export type PrDomSignal = { type: "prDomSignal"; ref: PrRef }
 export type TokenChanged = { type: "tokenChanged" }
 export type TokenCleared = { type: "tokenCleared" }
 
@@ -46,6 +52,7 @@ export type FaviconRequest =
   | RegisterPr
   | UnregisterPr
   | VisibilityChanged
+  | PrDomSignal
   | TokenChanged
   | TokenCleared
   | AddWatchedRepo

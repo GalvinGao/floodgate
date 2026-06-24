@@ -11,6 +11,8 @@ import type {
   RegisterPrResponse
 } from "~lib/messages"
 import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
+import type { PrStatus } from "~lib/pr-status"
+import { signalFetchDue } from "~lib/refresh-gate"
 import { REGISTRY_KEY, type RegistryEntry } from "~lib/registry"
 import { openAndGroup, type TabGroupApi } from "~lib/tab-group"
 import { onPoll, onRegister, onVisibilityChange } from "~lib/unread"
@@ -319,6 +321,73 @@ async function pollAll(force = false): Promise<void> {
   await reconcilePollAlarm()
 }
 
+// ============================================================================
+// Signal-driven refresh — single entry point for DOM/visibility signals
+// ============================================================================
+
+// Refs with a signal-triggered fetch currently in flight (this SW lifetime).
+// Added before the await, removed in finally → a second signal for the same ref
+// while its fetch is running is dropped (in-flight dedup), complementing the
+// per-ref min-interval (which bounds rate over time).
+const inFlightSignalRefs = new Set<string>()
+
+/**
+ * Refresh a PR from a fast signal (DOM poke or visibility re-poll). Resolves the
+ * ref (explicit `ref` wins; else the tab's registered ref), gates on the
+ * persisted per-ref min-interval + tier (signals bypass the fast/slow throttle
+ * but not the floor, and never fetch stop-tier refs), dedups in-flight, then
+ * reuses fetchAndPushRef to fetch once and fan out to every tab showing the ref.
+ * No-ops without a token, mirroring pollAll — the alarm path (R12) is untouched.
+ */
+async function requestRefresh({
+  ref,
+  tabId
+}: {
+  ref?: PrRef
+  tabId?: number
+}): Promise<void> {
+  const target = ref ?? (tabId != null ? prRegistry.get(tabId)?.ref : undefined)
+  if (!target) return // no explicit ref and the tab isn't registered → nothing to do
+  const token = await getToken()
+  if (!token) return
+
+  // Synchronous critical section (no await below until the fetch) → the gate
+  // read, stamp, and in-flight add are atomic relative to other requestRefresh
+  // calls, so two near-simultaneous signals can't both pass the gate.
+  const key = refKey(target)
+  if (inFlightSignalRefs.has(key)) return
+  const tabIds: number[] = []
+  let status: PrStatus | undefined
+  let lastSignal: number | undefined
+  for (const [id, entry] of prRegistry) {
+    if (refKey(entry.ref) !== key) continue
+    tabIds.push(id)
+    if (entry.status) status = entry.status
+    if (entry.lastSignalFetchedAt != null)
+      lastSignal = Math.max(lastSignal ?? 0, entry.lastSignalFetchedAt)
+  }
+  if (tabIds.length === 0) return // tab unregistered mid-flight
+  const now = Date.now()
+  const due = signalFetchDue({
+    tier: pollTier(status),
+    lastSignalFetchedAt: lastSignal,
+    now
+  })
+  if (!due) return
+  for (const id of tabIds) {
+    const entry = prRegistry.get(id)
+    if (entry) entry.lastSignalFetchedAt = now
+  }
+  persistRegistry() // mirror the stamp to storage.session so SW eviction can't reset it
+  inFlightSignalRefs.add(key)
+
+  try {
+    await fetchAndPushRef(target, tabIds, token)
+  } finally {
+    inFlightSignalRefs.delete(key)
+  }
+}
+
 /**
  * Auto-pin a freshly-opened PR tab. Acts once per tab (so a manual unpin is
  * never undone), and skips tabs opened into a tab group (box-select) or already
@@ -426,6 +495,10 @@ function handleVisibility(tabId: number, visible: boolean): void {
   if (visible && entry.status) {
     pushToTab(tabId, { type: "prStatus", status: entry.status, unread: false })
   }
+  // Now-visible tab: re-poll so it reflects current status instead of waiting
+  // for the next alarm tick (R8). Gated by the per-ref signal min-interval and
+  // token inside requestRefresh; cross-PR bursts are naturally user-paced.
+  if (visible) void requestRefresh({ tabId })
 }
 
 function unregister(tabId: number | null | undefined): void {
@@ -460,6 +533,8 @@ chrome.runtime.onMessage.addListener(
     }
     if (message?.type === "visibility" && tabId != null) {
       handleVisibility(tabId, message.visible)
+    } else if (message?.type === "prDomSignal") {
+      void requestRefresh({ ref: message.ref })
     } else if (message?.type === "unregisterPr") {
       unregister(tabId)
     } else if (message?.type === "tokenChanged") {
