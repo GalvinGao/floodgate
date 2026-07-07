@@ -22,6 +22,20 @@ export type CreateTabGroupResponse = {
   failed: number
 }
 
+/**
+ * Popup → background: box-select control. The popup owns the action UI (the icon
+ * now opens a popup, so `chrome.action.onClicked` no longer fires), so it drives
+ * arming through these messages. The popup resolves the target tab itself (it has
+ * proper window context) and passes its id.
+ */
+export type ArmBoxSelect = { type: "armBoxSelect"; tabId: number }
+export type DisarmBoxSelect = { type: "disarmBoxSelect"; tabId: number }
+export type GetArmState = { type: "getArmState" }
+export type PopupRequest = ArmBoxSelect | DisarmBoxSelect | GetArmState
+
+export type ArmBoxSelectResponse = { ok: boolean }
+export type GetArmStateResponse = { armedTabId: number | null }
+
 /** Content/Options → background (via chrome.runtime.sendMessage). */
 export type RegisterPr = { type: "registerPr"; ref: PrRef; visible: boolean }
 export type UnregisterPr = { type: "unregisterPr" }

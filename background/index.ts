@@ -1,3 +1,5 @@
+import { match } from "ts-pattern"
+
 import { isArmableUrl } from "~lib/activation"
 import { fetchOpenPrs, fetchPrStatus } from "~lib/github-api"
 import { isPrCommitUrl, parsePrUrl, type PrRef } from "~lib/github-pr"
@@ -8,6 +10,7 @@ import type {
   CreateTabGroupResponse,
   FaviconCommand,
   FaviconRequest,
+  PopupRequest,
   RegisterPrResponse
 } from "~lib/messages"
 import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
@@ -63,36 +66,40 @@ async function disarm(
   }
 }
 
-async function handleActionClick(tab: chrome.tabs.Tab): Promise<void> {
-  const tabId = tab.id
-  if (tabId == null) return
-
-  // Re-click on the armed tab toggles off.
-  if (armedTabId === tabId) {
-    await disarm(tabId, true)
-    return
+/**
+ * Arm box-select on a specific tab — the popup's target. The toolbar icon now
+ * opens a popup (so `chrome.action.onClicked` no longer fires); the popup calls
+ * this via `armBoxSelect`. Only arms where the content script can run, disarms
+ * any previously armed tab, sets the per-tab badge, and tells the content script
+ * to arm. Returns false (rolling back) if the tab is gone, isn't armable, or has
+ * no content-script receiver yet, so the popup can surface a retry hint.
+ */
+async function armTab(tabId: number): Promise<boolean> {
+  let tab: chrome.tabs.Tab
+  try {
+    tab = await chrome.tabs.get(tabId)
+  } catch {
+    return false // tab gone
   }
+  if (!isArmableUrl(tab.url)) return false
 
-  // onClicked fires on every tab; only arm where the content script can run.
-  if (!isArmableUrl(tab.url)) return
-
-  if (armedTabId != null) await disarm(armedTabId, true)
+  // Re-arming the already-armed tab is a no-op success (the content script's
+  // arm() self-guards); a *different* tab first tears down the old one.
+  if (armedTabId != null && armedTabId !== tabId) await disarm(armedTabId, true)
 
   armedTabId = tabId
   await setBadge(tabId, true)
 
   try {
     await chrome.tabs.sendMessage(tabId, { type: "arm" })
+    return true
   } catch {
     // No content-script receiver (tab opened before install/update, or still
     // loading). Roll back so the icon never shows a stuck "ON".
     await disarm(tabId, false)
+    return false
   }
 }
-
-chrome.action.onClicked.addListener((tab) => {
-  void handleActionClick(tab)
-})
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   if (armedTabId != null && armedTabId !== tabId) {
@@ -159,17 +166,33 @@ async function handleCreateTabGroup(
 }
 
 chrome.runtime.onMessage.addListener(
-  (message: ContentRequest, sender, sendResponse) => {
-    if (message?.type === "createTabGroup") {
-      // sender.tab is the page the selection was made on → group it first.
-      void handleCreateTabGroup(message, sender.tab?.id, sendResponse)
-      return true // keep the channel open for the async response
-    }
-    if (message?.type === "contentDisarmed") {
-      void disarm(sender.tab?.id ?? null, false)
-    }
-    return false
-  }
+  (message: ContentRequest | PopupRequest, sender, sendResponse) =>
+    match(message)
+      .with({ type: "createTabGroup" }, (m) => {
+        // sender.tab is the page the selection was made on → group it first.
+        void handleCreateTabGroup(m, sender.tab?.id, sendResponse)
+        return true // keep the channel open for the async response
+      })
+      .with({ type: "contentDisarmed" }, () => {
+        void disarm(sender.tab?.id ?? null, false)
+        return false
+      })
+      // --- Popup → background (sender.tab is undefined; the popup passes tabId) ---
+      .with({ type: "armBoxSelect" }, (m) => {
+        armTab(m.tabId)
+          .then((ok) => sendResponse({ ok }))
+          .catch(() => sendResponse({ ok: false }))
+        return true // keep the channel open for the async response
+      })
+      .with({ type: "disarmBoxSelect" }, (m) => {
+        void disarm(m.tabId, true)
+        return false
+      })
+      .with({ type: "getArmState" }, () => {
+        sendResponse({ armedTabId })
+        return false
+      })
+      .exhaustive()
 )
 
 // ============================================================================
@@ -528,38 +551,51 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener(
   (message: FaviconRequest, sender, sendResponse) => {
     const tabId = sender.tab?.id
-    if (message?.type === "registerPr" && tabId != null) {
-      handleRegisterPr(message.ref, tabId, message.visible)
-        .then(sendResponse)
-        .catch(() => sendResponse({ hasToken: false }))
-      return true // async response
-    }
-    if (message?.type === "addWatchedRepo") {
-      handleAddWatchedRepo(message.owner, message.repo)
-        .then(sendResponse)
-        .catch(() => sendResponse({ ok: false, error: "network" }))
-      return true // async response
-    }
-    if (message?.type === "visibility" && tabId != null) {
-      handleVisibility(tabId, message.visible)
-    } else if (message?.type === "prDomSignal") {
-      void requestRefresh({ ref: message.ref })
-    } else if (message?.type === "unregisterPr") {
-      unregister(tabId)
-    } else if (message?.type === "tokenChanged") {
-      void pollAll(true) // token now present → refresh everything
-    } else if (message?.type === "tokenCleared") {
-      for (const id of prRegistry.keys()) {
-        void setErrorBadge(id, false)
-        pushToTab(id, { type: "restoreFavicon" })
-      }
-      prRegistry.clear()
-      persistRegistry()
-      void chrome.alarms.clear(POLL_ALARM)
-    } else if (message?.type === "removeWatchedRepo") {
-      handleRemoveWatchedRepo(message.owner, message.repo)
-    }
-    return false
+    return match(message)
+      .with({ type: "registerPr" }, (m) => {
+        if (tabId == null) return false
+        handleRegisterPr(m.ref, tabId, m.visible)
+          .then(sendResponse)
+          .catch(() => sendResponse({ hasToken: false }))
+        return true // async response
+      })
+      .with({ type: "addWatchedRepo" }, (m) => {
+        handleAddWatchedRepo(m.owner, m.repo)
+          .then(sendResponse)
+          .catch(() => sendResponse({ ok: false, error: "network" }))
+        return true // async response
+      })
+      .with({ type: "visibility" }, (m) => {
+        if (tabId != null) handleVisibility(tabId, m.visible)
+        return false
+      })
+      .with({ type: "prDomSignal" }, (m) => {
+        void requestRefresh({ ref: m.ref })
+        return false
+      })
+      .with({ type: "unregisterPr" }, () => {
+        unregister(tabId)
+        return false
+      })
+      .with({ type: "tokenChanged" }, () => {
+        void pollAll(true) // token now present → refresh everything
+        return false
+      })
+      .with({ type: "tokenCleared" }, () => {
+        for (const id of prRegistry.keys()) {
+          void setErrorBadge(id, false)
+          pushToTab(id, { type: "restoreFavicon" })
+        }
+        prRegistry.clear()
+        persistRegistry()
+        void chrome.alarms.clear(POLL_ALARM)
+        return false
+      })
+      .with({ type: "removeWatchedRepo" }, (m) => {
+        handleRemoveWatchedRepo(m.owner, m.repo)
+        return false
+      })
+      .exhaustive()
   }
 )
 
