@@ -8,6 +8,7 @@ import type {
   CreateTabGroupResponse,
   FaviconCommand,
   FaviconRequest,
+  PopupRequest,
   RegisterPrResponse
 } from "~lib/messages"
 import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
@@ -63,36 +64,40 @@ async function disarm(
   }
 }
 
-async function handleActionClick(tab: chrome.tabs.Tab): Promise<void> {
-  const tabId = tab.id
-  if (tabId == null) return
-
-  // Re-click on the armed tab toggles off.
-  if (armedTabId === tabId) {
-    await disarm(tabId, true)
-    return
+/**
+ * Arm box-select on a specific tab — the popup's target. The toolbar icon now
+ * opens a popup (so `chrome.action.onClicked` no longer fires); the popup calls
+ * this via `armBoxSelect`. Only arms where the content script can run, disarms
+ * any previously armed tab, sets the per-tab badge, and tells the content script
+ * to arm. Returns false (rolling back) if the tab is gone, isn't armable, or has
+ * no content-script receiver yet, so the popup can surface a retry hint.
+ */
+async function armTab(tabId: number): Promise<boolean> {
+  let tab: chrome.tabs.Tab
+  try {
+    tab = await chrome.tabs.get(tabId)
+  } catch {
+    return false // tab gone
   }
+  if (!isArmableUrl(tab.url)) return false
 
-  // onClicked fires on every tab; only arm where the content script can run.
-  if (!isArmableUrl(tab.url)) return
-
-  if (armedTabId != null) await disarm(armedTabId, true)
+  // Re-arming the already-armed tab is a no-op success (the content script's
+  // arm() self-guards); a *different* tab first tears down the old one.
+  if (armedTabId != null && armedTabId !== tabId) await disarm(armedTabId, true)
 
   armedTabId = tabId
   await setBadge(tabId, true)
 
   try {
     await chrome.tabs.sendMessage(tabId, { type: "arm" })
+    return true
   } catch {
     // No content-script receiver (tab opened before install/update, or still
     // loading). Roll back so the icon never shows a stuck "ON".
     await disarm(tabId, false)
+    return false
   }
 }
-
-chrome.action.onClicked.addListener((tab) => {
-  void handleActionClick(tab)
-})
 
 chrome.tabs.onActivated.addListener(({ tabId }) => {
   if (armedTabId != null && armedTabId !== tabId) {
@@ -159,7 +164,7 @@ async function handleCreateTabGroup(
 }
 
 chrome.runtime.onMessage.addListener(
-  (message: ContentRequest, sender, sendResponse) => {
+  (message: ContentRequest | PopupRequest, sender, sendResponse) => {
     if (message?.type === "createTabGroup") {
       // sender.tab is the page the selection was made on → group it first.
       void handleCreateTabGroup(message, sender.tab?.id, sendResponse)
@@ -167,6 +172,21 @@ chrome.runtime.onMessage.addListener(
     }
     if (message?.type === "contentDisarmed") {
       void disarm(sender.tab?.id ?? null, false)
+    }
+    // --- Popup → background (sender.tab is undefined; the popup passes tabId) ---
+    if (message?.type === "armBoxSelect") {
+      armTab(message.tabId)
+        .then((ok) => sendResponse({ ok }))
+        .catch(() => sendResponse({ ok: false }))
+      return true // keep the channel open for the async response
+    }
+    if (message?.type === "disarmBoxSelect") {
+      void disarm(message.tabId, true)
+      return false
+    }
+    if (message?.type === "getArmState") {
+      sendResponse({ armedTabId })
+      return false
     }
     return false
   }
