@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react"
+import { match } from "ts-pattern"
 
 import { isArmableUrl } from "~lib/activation"
 import type { ArmBoxSelectResponse, GetArmStateResponse } from "~lib/messages"
@@ -174,13 +175,14 @@ function Popup() {
     setError("Couldn’t start here. Reload the GitHub page, then try again.")
   }
 
-  const [label, caption] = arming
-    ? ["Starting…", "Opening selection mode"]
-    : isArmed
-      ? ["Stop selecting", "Cancel on this tab"]
-      : armable
-        ? ["Select & group links", "Drag a box over links to group"]
-        : ["Open a GitHub page", "Selection works on github.com"]
+  const [label, caption] = match({ arming, isArmed, armable })
+    .with({ arming: true }, () => ["Starting…", "Opening selection mode"])
+    .with({ isArmed: true }, () => ["Stop selecting", "Cancel on this tab"])
+    .with({ armable: true }, () => [
+      "Select & group links",
+      "Drag a box over links to group"
+    ])
+    .otherwise(() => ["Open a GitHub page", "Selection works on github.com"])
 
   return (
     <div className="fg">

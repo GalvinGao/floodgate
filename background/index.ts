@@ -1,3 +1,5 @@
+import { match } from "ts-pattern"
+
 import { isArmableUrl } from "~lib/activation"
 import { fetchOpenPrs, fetchPrStatus } from "~lib/github-api"
 import { isPrCommitUrl, parsePrUrl, type PrRef } from "~lib/github-pr"
@@ -164,32 +166,33 @@ async function handleCreateTabGroup(
 }
 
 chrome.runtime.onMessage.addListener(
-  (message: ContentRequest | PopupRequest, sender, sendResponse) => {
-    if (message?.type === "createTabGroup") {
-      // sender.tab is the page the selection was made on → group it first.
-      void handleCreateTabGroup(message, sender.tab?.id, sendResponse)
-      return true // keep the channel open for the async response
-    }
-    if (message?.type === "contentDisarmed") {
-      void disarm(sender.tab?.id ?? null, false)
-    }
-    // --- Popup → background (sender.tab is undefined; the popup passes tabId) ---
-    if (message?.type === "armBoxSelect") {
-      armTab(message.tabId)
-        .then((ok) => sendResponse({ ok }))
-        .catch(() => sendResponse({ ok: false }))
-      return true // keep the channel open for the async response
-    }
-    if (message?.type === "disarmBoxSelect") {
-      void disarm(message.tabId, true)
-      return false
-    }
-    if (message?.type === "getArmState") {
-      sendResponse({ armedTabId })
-      return false
-    }
-    return false
-  }
+  (message: ContentRequest | PopupRequest, sender, sendResponse) =>
+    match(message)
+      .with({ type: "createTabGroup" }, (m) => {
+        // sender.tab is the page the selection was made on → group it first.
+        void handleCreateTabGroup(m, sender.tab?.id, sendResponse)
+        return true // keep the channel open for the async response
+      })
+      .with({ type: "contentDisarmed" }, () => {
+        void disarm(sender.tab?.id ?? null, false)
+        return false
+      })
+      // --- Popup → background (sender.tab is undefined; the popup passes tabId) ---
+      .with({ type: "armBoxSelect" }, (m) => {
+        armTab(m.tabId)
+          .then((ok) => sendResponse({ ok }))
+          .catch(() => sendResponse({ ok: false }))
+        return true // keep the channel open for the async response
+      })
+      .with({ type: "disarmBoxSelect" }, (m) => {
+        void disarm(m.tabId, true)
+        return false
+      })
+      .with({ type: "getArmState" }, () => {
+        sendResponse({ armedTabId })
+        return false
+      })
+      .exhaustive()
 )
 
 // ============================================================================
@@ -548,38 +551,51 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener(
   (message: FaviconRequest, sender, sendResponse) => {
     const tabId = sender.tab?.id
-    if (message?.type === "registerPr" && tabId != null) {
-      handleRegisterPr(message.ref, tabId, message.visible)
-        .then(sendResponse)
-        .catch(() => sendResponse({ hasToken: false }))
-      return true // async response
-    }
-    if (message?.type === "addWatchedRepo") {
-      handleAddWatchedRepo(message.owner, message.repo)
-        .then(sendResponse)
-        .catch(() => sendResponse({ ok: false, error: "network" }))
-      return true // async response
-    }
-    if (message?.type === "visibility" && tabId != null) {
-      handleVisibility(tabId, message.visible)
-    } else if (message?.type === "prDomSignal") {
-      void requestRefresh({ ref: message.ref })
-    } else if (message?.type === "unregisterPr") {
-      unregister(tabId)
-    } else if (message?.type === "tokenChanged") {
-      void pollAll(true) // token now present → refresh everything
-    } else if (message?.type === "tokenCleared") {
-      for (const id of prRegistry.keys()) {
-        void setErrorBadge(id, false)
-        pushToTab(id, { type: "restoreFavicon" })
-      }
-      prRegistry.clear()
-      persistRegistry()
-      void chrome.alarms.clear(POLL_ALARM)
-    } else if (message?.type === "removeWatchedRepo") {
-      handleRemoveWatchedRepo(message.owner, message.repo)
-    }
-    return false
+    return match(message)
+      .with({ type: "registerPr" }, (m) => {
+        if (tabId == null) return false
+        handleRegisterPr(m.ref, tabId, m.visible)
+          .then(sendResponse)
+          .catch(() => sendResponse({ hasToken: false }))
+        return true // async response
+      })
+      .with({ type: "addWatchedRepo" }, (m) => {
+        handleAddWatchedRepo(m.owner, m.repo)
+          .then(sendResponse)
+          .catch(() => sendResponse({ ok: false, error: "network" }))
+        return true // async response
+      })
+      .with({ type: "visibility" }, (m) => {
+        if (tabId != null) handleVisibility(tabId, m.visible)
+        return false
+      })
+      .with({ type: "prDomSignal" }, (m) => {
+        void requestRefresh({ ref: m.ref })
+        return false
+      })
+      .with({ type: "unregisterPr" }, () => {
+        unregister(tabId)
+        return false
+      })
+      .with({ type: "tokenChanged" }, () => {
+        void pollAll(true) // token now present → refresh everything
+        return false
+      })
+      .with({ type: "tokenCleared" }, () => {
+        for (const id of prRegistry.keys()) {
+          void setErrorBadge(id, false)
+          pushToTab(id, { type: "restoreFavicon" })
+        }
+        prRegistry.clear()
+        persistRegistry()
+        void chrome.alarms.clear(POLL_ALARM)
+        return false
+      })
+      .with({ type: "removeWatchedRepo" }, (m) => {
+        handleRemoveWatchedRepo(m.owner, m.repo)
+        return false
+      })
+      .exhaustive()
   }
 )
 
