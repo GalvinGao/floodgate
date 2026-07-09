@@ -11,7 +11,7 @@ Floodgate is a Chrome extension (MV3) for working with GitHub pull requests. It:
 - **marks PRs that changed while the tab was backgrounded** with an unread dot,
   cleared when you focus the tab;
 - **auto-opens new PRs from watched repos** as inactive, deduped tabs (pinned
-  only when auto-pin is enabled in Options — off by default);
+  unless auto-pin is disabled in Options — on by default);
 - **opens a box-selected cluster of links** (e.g. a stack of PRs in an issue) as
   one named tab group.
 

@@ -715,21 +715,21 @@ function WatchedRepos() {
 
 // --- Auto-pin toggle ---------------------------------------------------------
 
-/** Opt-in switch for auto-pinning PR tabs. Off by default (key absent === off). */
+/** Switch for auto-pinning PR tabs. On by default (key absent === on). */
 function AutoPinToggle() {
-  const [autoPin, setAutoPin] = useState(false)
+  const [autoPin, setAutoPin] = useState(true)
 
   useEffect(() => {
     let alive = true
     chrome.storage.local.get(AUTO_PIN_KEY).then((local) => {
-      if (alive) setAutoPin(local[AUTO_PIN_KEY] === true)
+      if (alive) setAutoPin(local[AUTO_PIN_KEY] !== false)
     })
     const onChange = (
       changes: Record<string, chrome.storage.StorageChange>,
       area: string
     ) => {
       if (area === "local" && changes[AUTO_PIN_KEY]) {
-        setAutoPin(changes[AUTO_PIN_KEY].newValue === true)
+        setAutoPin(changes[AUTO_PIN_KEY].newValue !== false)
       }
     }
     chrome.storage.onChanged.addListener(onChange)
@@ -770,8 +770,8 @@ function AutoPinToggle() {
               marginTop: 2
             }}>
             When on, opening a PR pins its tab (and watched-repo PRs open
-            pinned). Off by default — leave it off to keep PR tabs unpinned. A
-            tab you unpin by hand is never re-pinned.
+            pinned). On by default — turn it off to keep PR tabs unpinned. A tab
+            you unpin by hand is never re-pinned.
           </span>
         </span>
       </label>
