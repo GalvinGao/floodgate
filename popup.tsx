@@ -2,7 +2,12 @@ import { useEffect, useState } from "react"
 import { match } from "ts-pattern"
 
 import { isArmableUrl } from "~lib/activation"
-import type { ArmBoxSelectResponse, GetArmStateResponse } from "~lib/messages"
+import type {
+  ArmBoxSelectResponse,
+  GetArmStateResponse,
+  OrganizePinsResponse,
+  ReconcileTabsResponse
+} from "~lib/messages"
 
 const AUTO_PIN_KEY = "prFavicon.autoPin"
 
@@ -102,9 +107,13 @@ function AutoPinSegmented({
 function Popup() {
   const [tab, setTab] = useState<chrome.tabs.Tab | null>(null)
   const [armedTabId, setArmedTabId] = useState<number | null>(null)
-  const [autoPin, setAutoPin] = useState(false)
+  const [autoPin, setAutoPin] = useState(true)
   const [arming, setArming] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [organizing, setOrganizing] = useState(false)
+  const [organizeMsg, setOrganizeMsg] = useState<string | null>(null)
+  const [reconciling, setReconciling] = useState(false)
+  const [reconcileMsg, setReconcileMsg] = useState<string | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -119,7 +128,7 @@ function Popup() {
       })
       .catch(() => {})
     chrome.storage.local.get(AUTO_PIN_KEY).then((s) => {
-      if (alive) setAutoPin(s[AUTO_PIN_KEY] === true)
+      if (alive) setAutoPin(s[AUTO_PIN_KEY] !== false)
     })
 
     // Keep the toggle in sync if Options flips it while the popup is open.
@@ -128,7 +137,7 @@ function Popup() {
       area: string
     ) => {
       if (area === "local" && changes[AUTO_PIN_KEY]) {
-        setAutoPin(changes[AUTO_PIN_KEY].newValue === true)
+        setAutoPin(changes[AUTO_PIN_KEY].newValue !== false)
       }
     }
     chrome.storage.onChanged.addListener(onChange)
@@ -145,6 +154,84 @@ function Popup() {
   const setPin = (next: boolean) => {
     setAutoPin(next) // optimistic; storage.onChanged (and Options) reconcile
     void chrome.storage.local.set({ [AUTO_PIN_KEY]: next })
+  }
+
+  const onOrganize = async () => {
+    const windowId = tab?.windowId
+    if (windowId == null || organizing) return
+    setOrganizing(true)
+    setOrganizeMsg(null)
+    const res = (await chrome.runtime
+      .sendMessage({ type: "organizePins", windowId })
+      .catch((err) => {
+        console.error("[organize] sendMessage failed:", err)
+        return { ok: false, error: String(err?.message ?? err) } as const
+      })) as OrganizePinsResponse | undefined
+    setOrganizing(false)
+    if (!res) {
+      setOrganizeMsg(
+        "No response from the extension — reload it at chrome://extensions and retry."
+      )
+      return
+    }
+    if (res.ok === false) {
+      setOrganizeMsg(`Couldn’t organize tabs: ${res.error}`)
+      return
+    }
+    // "closed 2 merged and 1 duplicate" — merge the two close reasons into one clause.
+    const closedBits: string[] = []
+    if (res.closed > 0) closedBits.push(`${res.closed} merged`)
+    if (res.deduped > 0) {
+      closedBits.push(`${res.deduped} duplicate${res.deduped === 1 ? "" : "s"}`)
+    }
+    const parts: string[] = []
+    if (closedBits.length > 0) parts.push(`closed ${closedBits.join(" and ")}`)
+    if (res.moved > 0) {
+      parts.push(`moved ${res.moved} tab${res.moved === 1 ? "" : "s"}`)
+    }
+    if (parts.length === 0) {
+      setOrganizeMsg("Already organized — nothing to change.")
+      return
+    }
+    const suffix = res.failed > 0 ? ` (${res.failed} couldn’t move)` : ""
+    const msg = parts.join(", ") // sentence-case the first clause
+    setOrganizeMsg(`${msg.charAt(0).toUpperCase()}${msg.slice(1)}${suffix}.`)
+  }
+
+  const onReconcile = async () => {
+    if (reconciling) return
+    setReconciling(true)
+    setReconcileMsg(null)
+    const res = (await chrome.runtime
+      .sendMessage({ type: "reconcileTabs" })
+      .catch((err) => {
+        console.error("[reconcile] sendMessage failed:", err)
+        return { ok: false, error: String(err?.message ?? err) } as const
+      })) as ReconcileTabsResponse | undefined
+    setReconciling(false)
+    if (!res) {
+      setReconcileMsg(
+        "No response from the extension — reload it at chrome://extensions and retry."
+      )
+      return
+    }
+    if (res.ok === false) {
+      setReconcileMsg(res.error)
+      return
+    }
+    if (res.repos === 0) {
+      setReconcileMsg("No watched repos yet — add some in settings.")
+      return
+    }
+    const suffix =
+      res.failed > 0 ? ` (${res.failed} repo couldn’t be read)` : ""
+    if (res.opened === 0) {
+      setReconcileMsg(`All open PRs are already open${suffix}.`)
+      return
+    }
+    setReconcileMsg(
+      `Opened ${res.opened} PR${res.opened === 1 ? "" : "s"}${suffix}.`
+    )
   }
 
   const onTrigger = async () => {
@@ -225,6 +312,32 @@ function Popup() {
           When on, PR tabs (and watched-repo PRs) open pinned. Unpin one by hand
           and it stays that way.
         </p>
+
+        <button
+          type="button"
+          className="fg__btn2"
+          disabled={organizing || tab?.windowId == null}
+          onClick={() => void onOrganize()}>
+          {organizing ? "Organizing…" : "Organize Pins"}
+        </button>
+        <p className="fg__note">
+          Groups PR tabs by repo (pinned tabs, each group, and the rest,
+          separately), then closes ones that are already merged or duplicated.
+        </p>
+        {organizeMsg && <p className="fg__msg">{organizeMsg}</p>}
+
+        <button
+          type="button"
+          className="fg__btn2"
+          disabled={reconciling}
+          onClick={() => void onReconcile()}>
+          {reconciling ? "Reconciling…" : "Reconcile Tabs"}
+        </button>
+        <p className="fg__note">
+          Opens every currently-open PR across your watched repos that isn’t
+          already open — catching up on the backlog.
+        </p>
+        {reconcileMsg && <p className="fg__msg">{reconcileMsg}</p>}
       </section>
 
       <footer className="fg__foot">
@@ -334,6 +447,27 @@ const STYLE = `
   .fg__row { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
   .fg__rowlabel { font-size: 13px; font-weight: 500; }
   .fg__note { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: var(--faint); }
+  .fg__msg { margin: 8px 2px 0; font-size: 12px; line-height: 1.35; color: var(--muted); }
+
+  .fg__btn2 {
+    margin-top: 12px;
+    display: inline-flex;
+    align-items: center;
+    padding: 7px 12px;
+    border-radius: 8px;
+    border: 1px solid var(--line-2);
+    background: var(--surface);
+    color: var(--text);
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: border-color 0.18s, background 0.18s, transform 0.12s;
+  }
+  .fg__btn2:hover:not(:disabled) { border-color: var(--accent); background: var(--surface-2); }
+  .fg__btn2:active:not(:disabled) { transform: translateY(1px); }
+  .fg__btn2:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+  .fg__btn2:disabled { cursor: default; opacity: 0.6; }
 
   .seg {
     position: relative;

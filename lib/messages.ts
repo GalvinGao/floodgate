@@ -31,10 +31,43 @@ export type CreateTabGroupResponse = {
 export type ArmBoxSelect = { type: "armBoxSelect"; tabId: number }
 export type DisarmBoxSelect = { type: "disarmBoxSelect"; tabId: number }
 export type GetArmState = { type: "getArmState" }
-export type PopupRequest = ArmBoxSelect | DisarmBoxSelect | GetArmState
+/** Cluster a window's PR tabs by repo, within each partition (pins/groups/rest). */
+export type OrganizePins = { type: "organizePins"; windowId: number }
+/** Open every currently-open PR across all watched repos that isn't open yet. */
+export type ReconcileTabs = { type: "reconcileTabs" }
+export type PopupRequest =
+  | ArmBoxSelect
+  | DisarmBoxSelect
+  | GetArmState
+  | OrganizePins
+  | ReconcileTabs
 
 export type ArmBoxSelectResponse = { ok: boolean }
 export type GetArmStateResponse = { armedTabId: number | null }
+/**
+ * `closed` is the number of merged-PR tabs removed; `deduped` the number of
+ * duplicate PR tabs removed (same page open more than once, one copy kept);
+ * `moved` the number relocated (0 when already organized); `failed` counts moves
+ * Chrome rejected. `error` carries the message on a hard failure.
+ */
+export type OrganizePinsResponse =
+  | {
+      ok: true
+      closed: number
+      deduped: number
+      moved: number
+      failed: number
+    }
+  | { ok: false; error: string }
+
+/**
+ * `opened` is the number of PR tabs opened; `repos` the number of watched repos
+ * scanned; `failed` the number of repos whose PR list couldn't be fetched.
+ * `error` carries the message on a hard failure (e.g. no token).
+ */
+export type ReconcileTabsResponse =
+  | { ok: true; opened: number; repos: number; failed: number }
+  | { ok: false; error: string }
 
 /** Content/Options → background (via chrome.runtime.sendMessage). */
 export type RegisterPr = { type: "registerPr"; ref: PrRef; visible: boolean }

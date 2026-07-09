@@ -10,9 +10,18 @@ import type {
   CreateTabGroupResponse,
   FaviconCommand,
   FaviconRequest,
+  OrganizePinsResponse,
   PopupRequest,
+  ReconcileTabsResponse,
   RegisterPrResponse
 } from "~lib/messages"
+import {
+  planPinOrganization,
+  selectDuplicateTabs,
+  selectMergedTabs,
+  TAB_GROUP_ID_NONE,
+  type OrganizeTab
+} from "~lib/organize-pins"
 import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
 import { signalRefreshDue } from "~lib/refresh-gate"
 import { REGISTRY_KEY, type RegistryEntry } from "~lib/registry"
@@ -34,7 +43,7 @@ import {
 // to lose on SW idle — re-arming is one click, and createTabGroup is self-contained.
 let armedTabId: number | null = null
 
-// PR tabs are auto-pinned on open when the user has opted in (AUTO_PIN_KEY).
+// PR tabs are auto-pinned on open unless the user turns it off (AUTO_PIN_KEY).
 // Two in-memory sets gate that:
 //  • groupOpenedTabs — tabs opened (or led) into a tab group; never auto-pinned.
 //  • autoPinAttempted — tabs already evaluated once, so a manual unpin sticks.
@@ -165,6 +174,86 @@ async function handleCreateTabGroup(
   })
 }
 
+/**
+ * Cluster a window's PR tabs by repo. Runs the pure planner over every tab in
+ * the window, then applies its moves in order (each is a left-move onto the
+ * already-finalized prefix, so intermediate index shifts stay consistent).
+ * Resolves the number of tabs relocated.
+ */
+/** Snapshot a window's tabs as OrganizeTab[], tagging merged PRs from the registry. */
+async function snapshotWindow(windowId: number): Promise<OrganizeTab[]> {
+  const tabs = await chrome.tabs.query({ windowId })
+  return tabs
+    .filter((t): t is chrome.tabs.Tab & { id: number } => t.id != null)
+    .map((t) => {
+      const entry = prRegistry.get(t.id)
+      return {
+        id: t.id,
+        index: t.index,
+        pinned: t.pinned ?? false,
+        groupId: t.groupId ?? TAB_GROUP_ID_NONE,
+        url: t.url || t.pendingUrl || "",
+        // Carry the ref only when the last-known status is merged, so the pure
+        // selector can confirm the tab still shows that PR before closing it.
+        mergedRef: entry?.status?.state === "merged" ? entry.ref : undefined
+      }
+    })
+}
+
+async function closeTabs(tabIds: number[], label: string): Promise<number> {
+  let closed = 0
+  for (const tabId of tabIds) {
+    try {
+      await chrome.tabs.remove(tabId)
+      closed++
+    } catch (err) {
+      console.warn(`[organize] close ${label} tab ${tabId} failed:`, err)
+    }
+  }
+  return closed
+}
+
+async function handleOrganizePins(
+  windowId: number
+): Promise<{ closed: number; deduped: number; moved: number; failed: number }> {
+  // Each close phase re-queries the window afterward so the next step runs on the
+  // real post-close strip (robust to a close Chrome rejects).
+
+  // 1. Close merged-PR tabs.
+  const closed = await closeTabs(
+    selectMergedTabs(await snapshotWindow(windowId)),
+    "merged"
+  )
+
+  // 2. Close duplicate PR tabs — the same PR page open more than once, keeping one
+  //    copy. Runs on the post-merge strip so a survivor always exists (a group
+  //    whose copies are all merged was already fully closed in step 1).
+  const deduped = await closeTabs(
+    selectDuplicateTabs(await snapshotWindow(windowId)),
+    "duplicate"
+  )
+
+  // 3. Reorganize whatever remains.
+  const after = await snapshotWindow(windowId)
+  const moves = planPinOrganization(after)
+  let failed = 0
+  for (const move of moves) {
+    try {
+      await chrome.tabs.move(move.tabId, { index: move.index })
+    } catch (err) {
+      failed++
+      console.warn(
+        `[organize] tab ${move.tabId} → index ${move.index} failed:`,
+        err
+      )
+    }
+  }
+  console.log(
+    `[organize] window ${windowId}: ${after.length} tabs, ${closed} merged closed, ${deduped} duplicates closed, ${moves.length} moves, ${failed} failed`
+  )
+  return { closed, deduped, moved: moves.length, failed }
+}
+
 chrome.runtime.onMessage.addListener(
   (message: ContentRequest | PopupRequest, sender, sendResponse) =>
     match(message)
@@ -192,7 +281,36 @@ chrome.runtime.onMessage.addListener(
         sendResponse({ armedTabId })
         return false
       })
-      .exhaustive()
+      .with({ type: "organizePins" }, (m) => {
+        handleOrganizePins(m.windowId)
+          .then(({ closed, deduped, moved, failed }) =>
+            sendResponse({ ok: true, closed, deduped, moved, failed })
+          )
+          .catch((err) => {
+            console.error("[organize] failed:", err)
+            sendResponse({
+              ok: false,
+              error: err instanceof Error ? err.message : String(err)
+            })
+          })
+        return true // keep the channel open for the async response
+      })
+      .with({ type: "reconcileTabs" }, () => {
+        handleReconcileTabs()
+          .then((result) => sendResponse(result))
+          .catch((err) => {
+            console.error("[reconcile] failed:", err)
+            sendResponse({
+              ok: false,
+              error: err instanceof Error ? err.message : String(err)
+            })
+          })
+        return true // keep the channel open for the async response
+      })
+      // Messages are broadcast to every onMessage listener; ignore the ones this
+      // listener doesn't own (the favicon listener below handles them) instead of
+      // throwing NonExhaustiveError and spamming the service-worker console.
+      .otherwise(() => false)
 )
 
 // ============================================================================
@@ -200,8 +318,8 @@ chrome.runtime.onMessage.addListener(
 // ============================================================================
 
 const TOKEN_KEY = "prFavicon.token"
-// Auto-pin opt-in. Absent (the default) means OFF — PR tabs are never auto-pinned
-// unless the user enables it in Options. Only `=== true` turns it on.
+// Auto-pin toggle. Absent (the default) means ON — PR tabs are auto-pinned
+// unless the user disables it in Options. Only `=== false` turns it off.
 const AUTO_PIN_KEY = "prFavicon.autoPin"
 const POLL_ALARM = "pr-poll"
 
@@ -233,7 +351,7 @@ async function getToken(): Promise<string | null> {
 
 async function getAutoPin(): Promise<boolean> {
   const stored = await chrome.storage.local.get(AUTO_PIN_KEY)
-  return stored[AUTO_PIN_KEY] === true
+  return stored[AUTO_PIN_KEY] !== false
 }
 
 function refKey(ref: PrRef): string {
@@ -425,7 +543,7 @@ async function requestRefresh({
  */
 async function maybeAutoPin(tabId: number): Promise<void> {
   if (autoPinAttempted.has(tabId) || groupOpenedTabs.has(tabId)) return
-  // Opt-in, default off. Checked before marking attempted so toggling it on later
+  // On by default. Checked before marking attempted so toggling it on later
   // still pins PR tabs opened thereafter (the disabled pass leaves no mark).
   if (!(await getAutoPin())) return
   autoPinAttempted.add(tabId) // mark before await: no re-entrant double-pin
@@ -551,51 +669,55 @@ chrome.alarms.onAlarm.addListener((alarm) => {
 chrome.runtime.onMessage.addListener(
   (message: FaviconRequest, sender, sendResponse) => {
     const tabId = sender.tab?.id
-    return match(message)
-      .with({ type: "registerPr" }, (m) => {
-        if (tabId == null) return false
-        handleRegisterPr(m.ref, tabId, m.visible)
-          .then(sendResponse)
-          .catch(() => sendResponse({ hasToken: false }))
-        return true // async response
-      })
-      .with({ type: "addWatchedRepo" }, (m) => {
-        handleAddWatchedRepo(m.owner, m.repo)
-          .then(sendResponse)
-          .catch(() => sendResponse({ ok: false, error: "network" }))
-        return true // async response
-      })
-      .with({ type: "visibility" }, (m) => {
-        if (tabId != null) handleVisibility(tabId, m.visible)
-        return false
-      })
-      .with({ type: "prDomSignal" }, (m) => {
-        void requestRefresh({ ref: m.ref })
-        return false
-      })
-      .with({ type: "unregisterPr" }, () => {
-        unregister(tabId)
-        return false
-      })
-      .with({ type: "tokenChanged" }, () => {
-        void pollAll(true) // token now present → refresh everything
-        return false
-      })
-      .with({ type: "tokenCleared" }, () => {
-        for (const id of prRegistry.keys()) {
-          void setErrorBadge(id, false)
-          pushToTab(id, { type: "restoreFavicon" })
-        }
-        prRegistry.clear()
-        persistRegistry()
-        void chrome.alarms.clear(POLL_ALARM)
-        return false
-      })
-      .with({ type: "removeWatchedRepo" }, (m) => {
-        handleRemoveWatchedRepo(m.owner, m.repo)
-        return false
-      })
-      .exhaustive()
+    return (
+      match(message)
+        .with({ type: "registerPr" }, (m) => {
+          if (tabId == null) return false
+          handleRegisterPr(m.ref, tabId, m.visible)
+            .then(sendResponse)
+            .catch(() => sendResponse({ hasToken: false }))
+          return true // async response
+        })
+        .with({ type: "addWatchedRepo" }, (m) => {
+          handleAddWatchedRepo(m.owner, m.repo)
+            .then(sendResponse)
+            .catch(() => sendResponse({ ok: false, error: "network" }))
+          return true // async response
+        })
+        .with({ type: "visibility" }, (m) => {
+          if (tabId != null) handleVisibility(tabId, m.visible)
+          return false
+        })
+        .with({ type: "prDomSignal" }, (m) => {
+          void requestRefresh({ ref: m.ref })
+          return false
+        })
+        .with({ type: "unregisterPr" }, () => {
+          unregister(tabId)
+          return false
+        })
+        .with({ type: "tokenChanged" }, () => {
+          void pollAll(true) // token now present → refresh everything
+          return false
+        })
+        .with({ type: "tokenCleared" }, () => {
+          for (const id of prRegistry.keys()) {
+            void setErrorBadge(id, false)
+            pushToTab(id, { type: "restoreFavicon" })
+          }
+          prRegistry.clear()
+          persistRegistry()
+          void chrome.alarms.clear(POLL_ALARM)
+          return false
+        })
+        .with({ type: "removeWatchedRepo" }, (m) => {
+          handleRemoveWatchedRepo(m.owner, m.repo)
+          return false
+        })
+        // Popup/content messages are broadcast here too; ignore them (the listener
+        // above owns them) rather than throwing NonExhaustiveError on normal traffic.
+        .otherwise(() => false)
+    )
   }
 )
 
@@ -714,27 +836,35 @@ async function openPrTab(
   return created
 }
 
-/** One tick of watched-repo detection → auto-open (W4–W9). Token is already verified. */
-async function pollWatchedRepos(token: string): Promise<void> {
-  await watchedReady
-  if (watchedRepos.size === 0) return
-
-  // Build the cross-window already-open set once per tick (W7), plus an in-tick
-  // guard so two candidates / a slow content-script load can't double-open.
+/**
+ * Cross-window set of PR ref keys currently open in a tab (W7). A single-commit
+ * view (…/pull/N/commits/<sha>) is a different thing from the PR, so it doesn't
+ * count as the PR being open — the PR can still auto-open alongside it. On a
+ * tabs.query failure returns an empty set (worst case: one duplicate tab).
+ */
+async function openPrRefKeys(): Promise<Set<string>> {
   const openRefs = new Set<string>()
   try {
     const tabs = await chrome.tabs.query({ url: "*://github.com/*/*/pull/*" })
     for (const t of tabs) {
-      // A single-commit view (…/pull/N/commits/<sha>) is a different thing from the
-      // PR, so it doesn't count as the PR already being open (W7) — the PR can still
-      // auto-open alongside it.
       if (!t.url || isPrCommitUrl(t.url)) continue
       const r = parsePrUrl(t.url)
       if (r) openRefs.add(refKey(r))
     }
   } catch {
-    // tabs.query failed → proceed with an empty set (worst case: one dup tab).
+    // tabs.query failed → proceed with an empty set.
   }
+  return openRefs
+}
+
+/** One tick of watched-repo detection → auto-open (W4–W9). Token is already verified. */
+async function pollWatchedRepos(token: string): Promise<void> {
+  await watchedReady
+  if (watchedRepos.size === 0) return
+
+  // Cross-window already-open set once per tick (W7), plus an in-tick guard so two
+  // candidates / a slow content-script load can't double-open.
+  const openRefs = await openPrRefKeys()
   const openingThisTick = new Set<string>()
 
   let remaining = WATCHED_TICK_CAP // global per-tick cap across all repos (W8b)
@@ -786,6 +916,100 @@ async function pollWatchedRepos(token: string): Promise<void> {
   persistWatched()
   // Stamp the completed poll cycle so Options can show "last fetched X ago".
   void chrome.storage.session.set({ [LAST_FETCHED_KEY]: Date.now() })
+}
+
+// A single reconcile opens at most this many tabs — a safety valve so a repo with
+// a huge backlog of open PRs can't flood the window in one click.
+const RECONCILE_TAB_CAP = 50
+
+/**
+ * Open every currently-open PR across all watched repos that isn't already open
+ * (W7). This is the explicit "catch up on the backlog" counterpart to poll's
+ * auto-open: same eligibility (skips drafts + Renovate) but it ignores the
+ * watermark and the handled set, so it also reopens PRs you opened then closed —
+ * bringing your tabs back in sync with the repos' current open set. Each opened
+ * PR is still marked handled so a later poll won't re-open it once you close it.
+ * Bounded by RECONCILE_TAB_CAP. Per-repo fetch errors are isolated and counted.
+ */
+async function handleReconcileTabs(): Promise<ReconcileTabsResponse> {
+  await watchedReady
+  if (watchedRepos.size === 0) {
+    return { ok: true, opened: 0, repos: 0, failed: 0 }
+  }
+  const token = await getToken()
+  if (!token) {
+    return {
+      ok: false,
+      error: "Set a GitHub token in the extension's Options first."
+    }
+  }
+
+  const openRefs = await openPrRefKeys() // doubles as the in-run double-open guard
+  let opened = 0
+  let failed = 0
+  let remaining = RECONCILE_TAB_CAP
+  let windowId: number | undefined
+  let windowResolved = false
+  let first = true
+  for (const entry of watchedRepos.values()) {
+    if (remaining <= 0) break
+    if (!first) await delay(150) // share the poll's in-tick stagger
+    first = false
+
+    const result = await fetchOpenPrs(fetch, token, entry)
+    if (!result.ok || !result.prs) {
+      failed++ // per-repo error isolation (mirrors the poll path)
+      continue
+    }
+    // watermark 0 + no handled → every non-draft, non-Renovate open PR, regardless
+    // of age or whether we opened it before. Consider them all (cap = list size),
+    // ascending; the already-open filter and the RECONCILE_TAB_CAP tab budget
+    // (`remaining`) are enforced in the loop below, not by slicing candidates here
+    // — else already-open low numbers could push not-yet-open ones past the cap.
+    const { toOpen } = selectPrsToOpen({
+      prs: result.prs,
+      watermark: 0,
+      handled: [],
+      cap: result.prs.length
+    })
+    const handled = new Set(entry.handled)
+    for (const pr of toOpen) {
+      const key = refKey({
+        owner: entry.owner,
+        repo: entry.repo,
+        number: pr.number
+      })
+      if (openRefs.has(key)) continue // already open, or opened earlier this run
+      if (!windowResolved) {
+        windowId = await targetWindowId()
+        windowResolved = true
+      }
+      const created = await openPrTab(entry.owner, entry.repo, pr.number, {
+        windowId,
+        title: pr.title
+      })
+      if (created == null) {
+        // create failed (e.g. the target window closed) — re-resolve next time.
+        windowResolved = false
+        windowId = undefined
+        continue
+      }
+      openRefs.add(key) // don't open this PR twice within one reconcile
+      if (!handled.has(pr.number)) {
+        entry.handled.push(pr.number) // mark handled only after we actually open it
+        handled.add(pr.number)
+      }
+      opened++
+      remaining--
+      if (remaining <= 0) break
+    }
+  }
+  persistWatched()
+  void chrome.storage.session.set({ [LAST_FETCHED_KEY]: Date.now() })
+  console.log(
+    `[reconcile] ${watchedRepos.size} repos scanned, ${opened} opened, ${failed} failed`
+  )
+  return { ok: true, opened, repos: watchedRepos.size, failed }
 }
 
 export {}
