@@ -33,14 +33,11 @@ export type DisarmBoxSelect = { type: "disarmBoxSelect"; tabId: number }
 export type GetArmState = { type: "getArmState" }
 /** Cluster a window's PR tabs by repo, within each partition (pins/groups/rest). */
 export type OrganizePins = { type: "organizePins"; windowId: number }
-/** Open every currently-open PR across all watched repos that isn't open yet. */
-export type ReconcileTabs = { type: "reconcileTabs" }
 export type PopupRequest =
   | ArmBoxSelect
   | DisarmBoxSelect
   | GetArmState
   | OrganizePins
-  | ReconcileTabs
 
 export type ArmBoxSelectResponse = { ok: boolean }
 export type GetArmStateResponse = { armedTabId: number | null }
@@ -59,6 +56,23 @@ export type OrganizePinsResponse =
       failed: number
     }
   | { ok: false; error: string }
+
+/**
+ * Reconcile is slow (one GitHub fetch per watched repo, staggered), so it runs
+ * over a long-lived port named "reconcileTabs" rather than a one-shot message:
+ * the open port lets the background stream progress and keeps the service worker
+ * alive for the whole scan. The port carries zero or more ReconcileProgress
+ * messages, then exactly one final ReconcileTabsResponse.
+ *
+ * `done`/`total` count watched repos (done = the one being scanned now); `opened`
+ * is the running tally of PR tabs opened so far.
+ */
+export type ReconcileProgress = {
+  type: "progress"
+  done: number
+  total: number
+  opened: number
+}
 
 /**
  * `opened` is the number of PR tabs opened; `repos` the number of watched repos

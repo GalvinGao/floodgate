@@ -295,23 +295,37 @@ chrome.runtime.onMessage.addListener(
           })
         return true // keep the channel open for the async response
       })
-      .with({ type: "reconcileTabs" }, () => {
-        handleReconcileTabs()
-          .then((result) => sendResponse(result))
-          .catch((err) => {
-            console.error("[reconcile] failed:", err)
-            sendResponse({
-              ok: false,
-              error: err instanceof Error ? err.message : String(err)
-            })
-          })
-        return true // keep the channel open for the async response
-      })
       // Messages are broadcast to every onMessage listener; ignore the ones this
       // listener doesn't own (the favicon listener below handles them) instead of
       // throwing NonExhaustiveError and spamming the service-worker console.
       .otherwise(() => false)
 )
+
+// Reconcile runs over a long-lived port instead of a one-shot message: a scan of
+// many repos can take a while, so the open port both streams per-repo progress
+// back to the popup and keeps the service worker alive until it finishes. The
+// port carries progress frames, then a single final ReconcileTabsResponse.
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== "reconcileTabs") return
+  const post = (msg: unknown) => {
+    try {
+      port.postMessage(msg)
+    } catch {
+      // Popup dismissed → port closed. Drop the frame; the scan still finishes.
+    }
+  }
+  handleReconcileTabs((done, total, opened) =>
+    post({ type: "progress", done, total, opened })
+  )
+    .then((result) => post(result))
+    .catch((err) => {
+      console.error("[reconcile] failed:", err)
+      post({
+        ok: false,
+        error: err instanceof Error ? err.message : String(err)
+      })
+    })
+})
 
 // ============================================================================
 // PR status favicon — token-gated fetch + central chrome.alarms poll
@@ -931,7 +945,9 @@ const RECONCILE_TAB_CAP = 50
  * PR is still marked handled so a later poll won't re-open it once you close it.
  * Bounded by RECONCILE_TAB_CAP. Per-repo fetch errors are isolated and counted.
  */
-async function handleReconcileTabs(): Promise<ReconcileTabsResponse> {
+async function handleReconcileTabs(
+  onProgress?: (done: number, total: number, opened: number) => void
+): Promise<ReconcileTabsResponse> {
   await watchedReady
   if (watchedRepos.size === 0) {
     return { ok: true, opened: 0, repos: 0, failed: 0 }
@@ -944,9 +960,11 @@ async function handleReconcileTabs(): Promise<ReconcileTabsResponse> {
     }
   }
 
+  const total = watchedRepos.size
   const openRefs = await openPrRefKeys() // doubles as the in-run double-open guard
   let opened = 0
   let failed = 0
+  let scanned = 0
   let remaining = RECONCILE_TAB_CAP
   let windowId: number | undefined
   let windowResolved = false
@@ -955,6 +973,10 @@ async function handleReconcileTabs(): Promise<ReconcileTabsResponse> {
     if (remaining <= 0) break
     if (!first) await delay(150) // share the poll's in-tick stagger
     first = false
+    // Report before the fetch — that network round-trip is the slow part, so the
+    // count should read as "scanning repo N" while it's in flight, not after.
+    scanned++
+    onProgress?.(scanned, total, opened)
 
     const result = await fetchOpenPrs(fetch, token, entry)
     if (!result.ok || !result.prs) {

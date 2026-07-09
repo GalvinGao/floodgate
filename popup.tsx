@@ -6,6 +6,7 @@ import type {
   ArmBoxSelectResponse,
   GetArmStateResponse,
   OrganizePinsResponse,
+  ReconcileProgress,
   ReconcileTabsResponse
 } from "~lib/messages"
 
@@ -114,6 +115,11 @@ function Popup() {
   const [organizeMsg, setOrganizeMsg] = useState<string | null>(null)
   const [reconciling, setReconciling] = useState(false)
   const [reconcileMsg, setReconcileMsg] = useState<string | null>(null)
+  const [reconcileProgress, setReconcileProgress] = useState<{
+    done: number
+    total: number
+    opened: number
+  } | null>(null)
 
   useEffect(() => {
     let alive = true
@@ -198,17 +204,11 @@ function Popup() {
     setOrganizeMsg(`${msg.charAt(0).toUpperCase()}${msg.slice(1)}${suffix}.`)
   }
 
-  const onReconcile = async () => {
-    if (reconciling) return
-    setReconciling(true)
-    setReconcileMsg(null)
-    const res = (await chrome.runtime
-      .sendMessage({ type: "reconcileTabs" })
-      .catch((err) => {
-        console.error("[reconcile] sendMessage failed:", err)
-        return { ok: false, error: String(err?.message ?? err) } as const
-      })) as ReconcileTabsResponse | undefined
+  // Turn the port's final frame into the result line. `undefined` means the port
+  // dropped before a result arrived (SW evicted, or the popup lost the channel).
+  const finishReconcile = (res: ReconcileTabsResponse | undefined) => {
     setReconciling(false)
+    setReconcileProgress(null)
     if (!res) {
       setReconcileMsg(
         "No response from the extension — reload it at chrome://extensions and retry."
@@ -232,6 +232,43 @@ function Popup() {
     setReconcileMsg(
       `Opened ${res.opened} PR${res.opened === 1 ? "" : "s"}${suffix}.`
     )
+  }
+
+  const onReconcile = () => {
+    if (reconciling) return
+    setReconciling(true)
+    setReconcileMsg(null)
+    setReconcileProgress(null)
+
+    // A long-lived port, not sendMessage: it streams progress and keeps the SW
+    // alive for the whole scan (see ReconcileProgress in ~lib/messages).
+    const port = chrome.runtime.connect({ name: "reconcileTabs" })
+    let settled = false
+
+    port.onMessage.addListener(
+      (msg: ReconcileProgress | ReconcileTabsResponse) => {
+        // Only the final frame carries `ok`; everything else is a progress tick.
+        if ("ok" in msg) {
+          settled = true
+          port.disconnect()
+          finishReconcile(msg)
+          return
+        }
+        setReconcileProgress({
+          done: msg.done,
+          total: msg.total,
+          opened: msg.opened
+        })
+      }
+    )
+
+    port.onDisconnect.addListener(() => {
+      // Fires only when the *other* end drops (SW evicted mid-scan); our own
+      // disconnect() above doesn't trigger it. Guard anyway.
+      if (settled) return
+      settled = true
+      finishReconcile(undefined)
+    })
   }
 
   const onTrigger = async () => {
@@ -330,13 +367,34 @@ function Popup() {
           type="button"
           className="fg__btn2"
           disabled={reconciling}
-          onClick={() => void onReconcile()}>
-          {reconciling ? "Reconciling…" : "Reconcile Tabs"}
+          onClick={() => onReconcile()}>
+          {reconciling
+            ? reconcileProgress
+              ? `Scanning ${reconcileProgress.done}/${reconcileProgress.total}…`
+              : "Reconciling…"
+            : "Reconcile Tabs"}
         </button>
         <p className="fg__note">
           Opens every currently-open PR across your watched repos that isn’t
           already open — catching up on the backlog.
         </p>
+        {reconciling && reconcileProgress && (
+          <>
+            <div className="fg__prog" aria-hidden="true">
+              <span
+                className="fg__prog-bar"
+                style={{
+                  width: `${reconcileProgress.total > 0 ? Math.round((reconcileProgress.done / reconcileProgress.total) * 100) : 0}%`
+                }}
+              />
+            </div>
+            {reconcileProgress.opened > 0 && (
+              <p className="fg__msg">
+                {reconcileProgress.opened} opened so far…
+              </p>
+            )}
+          </>
+        )}
         {reconcileMsg && <p className="fg__msg">{reconcileMsg}</p>}
       </section>
 
@@ -448,6 +506,21 @@ const STYLE = `
   .fg__rowlabel { font-size: 13px; font-weight: 500; }
   .fg__note { margin: 8px 0 0; font-size: 12px; line-height: 1.45; color: var(--faint); }
   .fg__msg { margin: 8px 2px 0; font-size: 12px; line-height: 1.35; color: var(--muted); }
+
+  .fg__prog {
+    margin: 10px 2px 0;
+    height: 4px;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.08);
+    overflow: hidden;
+  }
+  .fg__prog-bar {
+    display: block;
+    height: 100%;
+    border-radius: 3px;
+    background: var(--accent);
+    transition: width 0.25s ease;
+  }
 
   .fg__btn2 {
     margin-top: 12px;
