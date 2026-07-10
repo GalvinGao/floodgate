@@ -9,7 +9,7 @@ import {
 
 import { faviconSvg, STATUS_HEX } from "~lib/favicon"
 import { validateToken } from "~lib/github-api"
-import type { PrRef } from "~lib/github-pr"
+import { prUrl, refKey, type PrRef } from "~lib/github-pr"
 import type { AddWatchedRepoResponse } from "~lib/messages"
 import {
   toFaviconSpec,
@@ -19,8 +19,14 @@ import {
   type ReviewState,
   type StatusColor
 } from "~lib/pr-status"
-import { REGISTRY_KEY, type RegistryEntry } from "~lib/registry"
+import { REGISTRY_KEY, type RegistrySnapshot } from "~lib/registry"
 import { formatRelative } from "~lib/relative-time"
+import {
+  AUTO_PIN_KEY,
+  hasTokenValue,
+  isAutoPinOn,
+  TOKEN_KEY
+} from "~lib/settings"
 import {
   LAST_FETCHED_KEY,
   parseOwnerRepo,
@@ -32,9 +38,6 @@ import {
 /** Crisp, scalable SVG favicon as an <img>-ready data URI. */
 const svgSrc = (spec: FaviconSpec, unread = false) =>
   `data:image/svg+xml,${encodeURIComponent(faviconSvg(spec, 64, { unread }))}`
-
-const TOKEN_KEY = "prFavicon.token"
-const AUTO_PIN_KEY = "prFavicon.autoPin"
 
 type Status =
   | { kind: "idle" }
@@ -290,10 +293,6 @@ function FaviconLegend() {
 
 // --- Monitored PR list -------------------------------------------------------
 
-const prUrl = (r: PrRef) =>
-  `https://github.com/${r.owner}/${r.repo}/pull/${r.number}`
-const refKey = (r: PrRef) => `${r.owner}/${r.repo}#${r.number}`
-
 const REVIEW_TEXT: Record<ReviewState, string> = {
   approved: "Approved",
   changes: "Changes requested",
@@ -316,7 +315,7 @@ interface MonitoredItem {
 }
 
 /** Collapse the per-tab registry into one row per unique PR. */
-function coalesce(snapshot: Record<string, RegistryEntry>): MonitoredItem[] {
+function coalesce(snapshot: RegistrySnapshot): MonitoredItem[] {
   const byKey = new Map<string, MonitoredItem>()
   for (const entry of Object.values(snapshot)) {
     if (!entry?.ref) continue
@@ -520,8 +519,7 @@ function WatchedRepos() {
     chrome.storage.local.get([WATCHED_KEY, TOKEN_KEY]).then((local) => {
       if (!alive) return
       setRepos(Object.values((local[WATCHED_KEY] ?? {}) as WatchedSnapshot))
-      const tok = local[TOKEN_KEY]
-      setHasToken(typeof tok === "string" && tok.trim().length > 0)
+      setHasToken(hasTokenValue(local[TOKEN_KEY]))
     })
     const onChange = (
       changes: Record<string, chrome.storage.StorageChange>,
@@ -536,8 +534,7 @@ function WatchedRepos() {
         )
       }
       if (changes[TOKEN_KEY]) {
-        const tok = changes[TOKEN_KEY].newValue
-        setHasToken(typeof tok === "string" && tok.trim().length > 0)
+        setHasToken(hasTokenValue(changes[TOKEN_KEY].newValue))
       }
     }
     chrome.storage.onChanged.addListener(onChange)
@@ -722,14 +719,14 @@ function AutoPinToggle() {
   useEffect(() => {
     let alive = true
     chrome.storage.local.get(AUTO_PIN_KEY).then((local) => {
-      if (alive) setAutoPin(local[AUTO_PIN_KEY] !== false)
+      if (alive) setAutoPin(isAutoPinOn(local[AUTO_PIN_KEY]))
     })
     const onChange = (
       changes: Record<string, chrome.storage.StorageChange>,
       area: string
     ) => {
       if (area === "local" && changes[AUTO_PIN_KEY]) {
-        setAutoPin(changes[AUTO_PIN_KEY].newValue !== false)
+        setAutoPin(isAutoPinOn(changes[AUTO_PIN_KEY].newValue))
       }
     }
     chrome.storage.onChanged.addListener(onChange)

@@ -9,8 +9,7 @@ import type {
   ReconcileProgress,
   ReconcileTabsResponse
 } from "~lib/messages"
-
-const AUTO_PIN_KEY = "prFavicon.autoPin"
+import { AUTO_PIN_KEY, isAutoPinOn } from "~lib/settings"
 
 // A "selection marquee" glyph (four corner brackets + a grouped-tab chip) that
 // ties the popup to the box-select feature.
@@ -134,7 +133,7 @@ function Popup() {
       })
       .catch(() => {})
     chrome.storage.local.get(AUTO_PIN_KEY).then((s) => {
-      if (alive) setAutoPin(s[AUTO_PIN_KEY] !== false)
+      if (alive) setAutoPin(isAutoPinOn(s[AUTO_PIN_KEY]))
     })
 
     // Keep the toggle in sync if Options flips it while the popup is open.
@@ -143,7 +142,7 @@ function Popup() {
       area: string
     ) => {
       if (area === "local" && changes[AUTO_PIN_KEY]) {
-        setAutoPin(changes[AUTO_PIN_KEY].newValue !== false)
+        setAutoPin(isAutoPinOn(changes[AUTO_PIN_KEY].newValue))
       }
     }
     chrome.storage.onChanged.addListener(onChange)

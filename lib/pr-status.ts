@@ -40,6 +40,15 @@ interface PrData {
   } | null
 }
 
+/** GitHub `statusCheckRollup.state` → our CheckState; anything else is "none". */
+const ROLLUP_CHECK: Record<string, CheckState> = {
+  SUCCESS: "success",
+  FAILURE: "failure",
+  ERROR: "failure",
+  PENDING: "pending",
+  EXPECTED: "pending"
+}
+
 /**
  * Normalize the GraphQL response into a defined status. Fully null-safe — any
  * missing field maps to a defined enum value and never throws (R9). The check
@@ -67,14 +76,7 @@ export function normalize(data: unknown): PrStatus {
   const node = pr?.commits?.nodes?.[0]?.commit
   const isHeadCommit = !!node && (!pr?.headRefOid || node.oid === pr.headRefOid)
   const rollup = isHeadCommit ? node?.statusCheckRollup?.state : undefined
-  const check: CheckState =
-    rollup === "SUCCESS"
-      ? "success"
-      : rollup === "FAILURE" || rollup === "ERROR"
-        ? "failure"
-        : rollup === "PENDING" || rollup === "EXPECTED"
-          ? "pending"
-          : "none"
+  const check: CheckState = (rollup && ROLLUP_CHECK[rollup]) || "none"
 
   const result: PrStatus = { review, check, state, isDraft: !!pr?.isDraft }
 

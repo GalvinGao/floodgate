@@ -2,7 +2,13 @@ import { match } from "ts-pattern"
 
 import { isArmableUrl } from "~lib/activation"
 import { fetchOpenPrs, fetchPrStatus } from "~lib/github-api"
-import { isPrCommitUrl, parsePrUrl, type PrRef } from "~lib/github-pr"
+import {
+  isPrCommitUrl,
+  parsePrUrl,
+  prUrl,
+  refKey,
+  type PrRef
+} from "~lib/github-pr"
 import type {
   AddWatchedRepoResponse,
   ContentRequest,
@@ -10,7 +16,6 @@ import type {
   CreateTabGroupResponse,
   FaviconCommand,
   FaviconRequest,
-  OrganizePinsResponse,
   PopupRequest,
   ReconcileTabsResponse,
   RegisterPrResponse
@@ -23,8 +28,15 @@ import {
   type OrganizeTab
 } from "~lib/organize-pins"
 import { hasPollable, isPollDue, pollTier } from "~lib/poll-policy"
+import { faviconSpecEqual, toFaviconSpec } from "~lib/pr-status"
 import { signalRefreshDue } from "~lib/refresh-gate"
 import { REGISTRY_KEY, type RegistryEntry } from "~lib/registry"
+import {
+  AUTO_PIN_KEY,
+  hasTokenValue,
+  isAutoPinOn,
+  TOKEN_KEY
+} from "~lib/settings"
 import { openAndGroup, type TabGroupApi } from "~lib/tab-group"
 import { onPoll, onRegister, onVisibilityChange } from "~lib/unread"
 import {
@@ -201,15 +213,19 @@ async function snapshotWindow(windowId: number): Promise<OrganizeTab[]> {
 }
 
 async function closeTabs(tabIds: number[], label: string): Promise<number> {
+  // Independent removals → close concurrently (mirrors openAndGroup's fan-out).
+  const results = await Promise.allSettled(
+    tabIds.map((tabId) => chrome.tabs.remove(tabId))
+  )
   let closed = 0
-  for (const tabId of tabIds) {
-    try {
-      await chrome.tabs.remove(tabId)
-      closed++
-    } catch (err) {
-      console.warn(`[organize] close ${label} tab ${tabId} failed:`, err)
-    }
-  }
+  results.forEach((result, i) => {
+    if (result.status === "fulfilled") closed++
+    else
+      console.warn(
+        `[organize] close ${label} tab ${tabIds[i]} failed:`,
+        result.reason
+      )
+  })
   return closed
 }
 
@@ -331,10 +347,6 @@ chrome.runtime.onConnect.addListener((port) => {
 // PR status favicon — token-gated fetch + central chrome.alarms poll
 // ============================================================================
 
-const TOKEN_KEY = "prFavicon.token"
-// Auto-pin toggle. Absent (the default) means ON — PR tabs are auto-pinned
-// unless the user disables it in Options. Only `=== false` turns it off.
-const AUTO_PIN_KEY = "prFavicon.autoPin"
 const POLL_ALARM = "pr-poll"
 
 // tabId -> entry. Mirrored to chrome.storage.session so it survives SW eviction.
@@ -360,16 +372,12 @@ function persistRegistry(): void {
 async function getToken(): Promise<string | null> {
   const stored = await chrome.storage.local.get(TOKEN_KEY)
   const token = stored[TOKEN_KEY]
-  return typeof token === "string" && token.trim() ? token.trim() : null
+  return hasTokenValue(token) ? token.trim() : null
 }
 
 async function getAutoPin(): Promise<boolean> {
   const stored = await chrome.storage.local.get(AUTO_PIN_KEY)
-  return stored[AUTO_PIN_KEY] !== false
-}
-
-function refKey(ref: PrRef): string {
-  return `${ref.owner}/${ref.repo}#${ref.number}`
+  return isAutoPinOn(stored[AUTO_PIN_KEY])
 }
 
 function pushToTab(tabId: number, message: FaviconCommand): void {
@@ -428,6 +436,8 @@ async function fetchAndPushRef(
       // Ref-match guard: the tab may have re-registered to another PR during the
       // fetch (SPA nav). Skip a stale result so it never paints A onto B (U6).
       if (!entry || refKey(entry.ref) !== refKey(ref)) continue
+      const prevStatus = entry.status
+      const prevUnread = !!entry.unread
       entry.lastPolledAt = now
       entry.status = status
       entry.error = false
@@ -435,8 +445,17 @@ async function fetchAndPushRef(
       // post-await) and the seenStatus baseline; onPoll never latches a visible
       // tab and only latches a hidden tab on a visible favicon change.
       Object.assign(entry, onPoll(entry, status))
+      const unread = !!entry.unread
       await setErrorBadge(tabId, false)
-      pushToTab(tabId, { type: "prStatus", status, unread: !!entry.unread })
+      // Skip the redraw when the content script already shows this exact favicon.
+      // Fast-tier PRs poll every ~1 min, so an unchanged status would otherwise
+      // re-encode the same PNG and swap the <link> every tick for no visible
+      // change. The (spec, unread) pair is exactly what drawFavicon renders.
+      const unchanged =
+        prevStatus !== undefined &&
+        unread === prevUnread &&
+        faviconSpecEqual(toFaviconSpec(status), toFaviconSpec(prevStatus))
+      if (!unchanged) pushToTab(tabId, { type: "prStatus", status, unread })
     }
     persistRegistry()
     return
@@ -835,17 +854,50 @@ async function openPrTab(
   number: number,
   { windowId, title }: { windowId?: number; title?: string }
 ): Promise<chrome.tabs.Tab | null> {
-  const url = `https://github.com/${owner}/${repo}/pull/${number}`
+  const url = prUrl({ owner, repo, number })
   const created = await chrome.tabs
     .create({ url, windowId, active: false })
     .catch(() => null)
-  const ref = `${owner}/${repo}#${number}`
+  const ref = refKey({ owner, repo, number })
   if (created == null) {
     console.warn(`[watched] failed to open new PR ${ref}`)
   } else {
     console.info(
       `[watched] opened new PR ${ref}${title ? ` — ${title}` : ""} in window ${created.windowId} (inactive)`
     )
+  }
+  return created
+}
+
+/** A watched run's target window, resolved lazily and re-resolved after a failure. */
+interface WindowSlot {
+  id: number | undefined
+  resolved: boolean
+}
+
+/**
+ * Open one watched PR into the run's target window. Resolves the window lazily
+ * (once per run) and, if the open fails (e.g. the window closed mid-run), clears
+ * the slot so the next call re-resolves it. Returns the created tab, or null.
+ * Shared by the poll and reconcile loops, whose surrounding cap/watermark/dedup
+ * logic differs but whose open-and-recover step is identical.
+ */
+async function openPrIntoWindow(
+  entry: { owner: string; repo: string },
+  pr: { number: number; title: string },
+  win: WindowSlot
+): Promise<chrome.tabs.Tab | null> {
+  if (!win.resolved) {
+    win.id = await targetWindowId()
+    win.resolved = true
+  }
+  const created = await openPrTab(entry.owner, entry.repo, pr.number, {
+    windowId: win.id,
+    title: pr.title
+  })
+  if (created == null) {
+    win.resolved = false
+    win.id = undefined
   }
   return created
 }
@@ -882,8 +934,7 @@ async function pollWatchedRepos(token: string): Promise<void> {
   const openingThisTick = new Set<string>()
 
   let remaining = WATCHED_TICK_CAP // global per-tick cap across all repos (W8b)
-  let windowId: number | undefined
-  let windowResolved = false
+  const win: WindowSlot = { id: undefined, resolved: false }
   let first = true
   for (const entry of watchedRepos.values()) {
     if (remaining <= 0) break
@@ -907,21 +958,10 @@ async function pollWatchedRepos(token: string): Promise<void> {
       })
       if (openRefs.has(key) || openingThisTick.has(key)) continue // W7: already open
       openingThisTick.add(key)
-      if (!windowResolved) {
-        windowId = await targetWindowId()
-        windowResolved = true
-      }
-      const created = await openPrTab(entry.owner, entry.repo, pr.number, {
-        windowId,
-        title: pr.title
-      })
-      if (created == null) {
-        // create failed (e.g. the target window closed mid-tick) — leave the PR
-        // UNHANDLED so it retries next tick, and re-resolve the window next time.
-        windowResolved = false
-        windowId = undefined
-        continue
-      }
+      // create failed (e.g. the target window closed mid-tick) → leave the PR
+      // UNHANDLED so it retries next tick (openPrIntoWindow re-resolves the window).
+      const created = await openPrIntoWindow(entry, pr, win)
+      if (created == null) continue
       entry.handled.push(pr.number) // mark handled only after we actually open it
       remaining--
       if (remaining <= 0) break
@@ -966,8 +1006,7 @@ async function handleReconcileTabs(
   let failed = 0
   let scanned = 0
   let remaining = RECONCILE_TAB_CAP
-  let windowId: number | undefined
-  let windowResolved = false
+  const win: WindowSlot = { id: undefined, resolved: false }
   let first = true
   for (const entry of watchedRepos.values()) {
     if (remaining <= 0) break
@@ -1002,20 +1041,8 @@ async function handleReconcileTabs(
         number: pr.number
       })
       if (openRefs.has(key)) continue // already open, or opened earlier this run
-      if (!windowResolved) {
-        windowId = await targetWindowId()
-        windowResolved = true
-      }
-      const created = await openPrTab(entry.owner, entry.repo, pr.number, {
-        windowId,
-        title: pr.title
-      })
-      if (created == null) {
-        // create failed (e.g. the target window closed) — re-resolve next time.
-        windowResolved = false
-        windowId = undefined
-        continue
-      }
+      const created = await openPrIntoWindow(entry, pr, win)
+      if (created == null) continue // create failed → re-resolve window next call
       openRefs.add(key) // don't open this PR twice within one reconcile
       if (!handled.has(pr.number)) {
         entry.handled.push(pr.number) // mark handled only after we actually open it

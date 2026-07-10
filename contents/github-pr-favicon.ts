@@ -1,7 +1,7 @@
 import type { PlasmoCSConfig } from "plasmo"
 
 import { drawFavicon } from "~lib/favicon"
-import { parsePrUrl, type PrRef } from "~lib/github-pr"
+import { parsePrUrl, refKey, type PrRef } from "~lib/github-pr"
 import {
   detectTerminalState,
   findMergeboxRegion,
@@ -33,8 +33,6 @@ let reassertTimer = 0
 // the dot without waiting for the background's authoritative push.
 let lastStatus: PrStatus | "fetching" | null = null
 let lastUnread = false
-
-const refKey = (r: PrRef) => `${r.owner}/${r.repo}#${r.number}`
 
 const iconLinks = () =>
   Array.from(

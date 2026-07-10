@@ -4,6 +4,14 @@ export interface PrRef {
   number: number
 }
 
+/** Stable string key for a PR ref — the identity used to coalesce tabs by PR. */
+export const refKey = (ref: PrRef): string =>
+  `${ref.owner}/${ref.repo}#${ref.number}`
+
+/** The canonical github.com URL for a PR ref. */
+export const prUrl = (ref: PrRef): string =>
+  `https://github.com/${ref.owner}/${ref.repo}/pull/${ref.number}`
+
 // /{owner}/{repo}/pull/{number} with optional subtab (/files, /commits, /checks…)
 const PR_PATH = /^\/([^/]+)\/([^/]+)\/pull\/(\d+)(?:\/|$)/
 
