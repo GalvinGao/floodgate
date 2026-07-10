@@ -187,9 +187,14 @@ describe("selectDuplicateTabs", () => {
     expect(selectDuplicateTabs(tabs)).toEqual([0, 1]) // pinned id 2 survives
   })
 
-  it("treats a PR and its subtab as distinct, not duplicates", () => {
-    const tabs = [tab(0, 0, pr("o/a", 5)), tab(1, 1, `${pr("o/a", 5)}/files`)]
-    expect(selectDuplicateTabs(tabs)).toEqual([])
+  it("closes a subtab (/files, /changes, …) as a duplicate of the PR", () => {
+    const tabs = [
+      tab(0, 0, pr("o/a", 5)),
+      tab(1, 1, `${pr("o/a", 5)}/files`),
+      tab(2, 2, `${pr("o/a", 5)}/changes`)
+    ]
+    // all three are views of the one PR → keep the leftmost, close the subtabs
+    expect(selectDuplicateTabs(tabs)).toEqual([1, 2])
   })
 
   it("collapses trailing-slash and hash variants of the same page", () => {
@@ -201,13 +206,29 @@ describe("selectDuplicateTabs", () => {
     expect(selectDuplicateTabs(tabs)).toEqual([1, 2])
   })
 
-  it("keeps distinct commits and query-scoped views separate", () => {
+  it("collapses query-scoped subtab views into the PR", () => {
+    const tabs = [
+      tab(0, 0, `${pr("o/a", 5)}/checks?check_run_id=1`),
+      tab(1, 1, `${pr("o/a", 5)}/checks?check_run_id=2`)
+    ]
+    // both are the same PR's checks subtab → one survives, the other closes
+    expect(selectDuplicateTabs(tabs)).toEqual([1])
+  })
+
+  it("keeps distinct commit diffs separate (each commit is its own page)", () => {
     const tabs = [
       tab(0, 0, `${pr("o/a", 5)}/commits/abc1234`),
-      tab(1, 1, `${pr("o/a", 5)}/commits/def5678`),
-      tab(2, 2, `${pr("o/a", 5)}/checks?check_run_id=1`),
-      tab(3, 3, `${pr("o/a", 5)}/checks?check_run_id=2`)
+      tab(1, 1, `${pr("o/a", 5)}/commits/def5678`)
     ]
+    expect(selectDuplicateTabs(tabs)).toEqual([])
+  })
+
+  it("keeps a specific-commit diff open alongside the PR", () => {
+    const tabs = [
+      tab(0, 0, pr("o/a", 5)),
+      tab(1, 1, `${pr("o/a", 5)}/commits/abc1234`)
+    ]
+    // the commit view is a distinct page, not a duplicate of the PR
     expect(selectDuplicateTabs(tabs)).toEqual([])
   })
 

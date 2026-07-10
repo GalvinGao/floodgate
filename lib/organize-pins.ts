@@ -1,4 +1,4 @@
-import { parsePrUrl, type PrRef } from "./github-pr"
+import { isPrCommitUrl, parsePrUrl, refKey, type PrRef } from "./github-pr"
 
 /** chrome.tabs.Tab.groupId sentinel for an ungrouped tab (TAB_GROUP_ID_NONE). */
 export const TAB_GROUP_ID_NONE = -1
@@ -118,29 +118,25 @@ function sequenceMoves(
  * Returns moves to apply in order via chrome.tabs.move; empty when already sorted.
  */
 /**
- * Normalize a PR tab's URL to the key two tabs must share to count as showing the
- * same page. Only PR tabs participate (non-PR URLs return null). The host is
- * lowercased and the hash + any trailing slash are dropped, so `…/pull/5`,
- * `…/pull/5/`, and `…/pull/5#issuecomment-1` collapse — while a distinct subtab
- * (`/files`), a specific commit (`/commits/<sha>`), and a query-scoped view
- * (`?check_run_id=…`) each stay separate. That mirrors the ordering rule that
- * keeps a PR and its subtab as distinct, coexisting tabs (they are not duplicates).
+ * The key two tabs must share to count as duplicate views of the same PR. Every
+ * one of a PR's tabs collapses to a single key — the PR itself, its subtabs
+ * (`/files`, `/commits`, `/checks`, `/changes`), and trailing-slash / hash /
+ * query-string variants — so any extra copy is a duplicate. This mirrors the
+ * open-time auto-pin dedup, which also keys by PR ref. Non-PR URLs return null.
+ * A specific-commit diff (`…/pull/N/commits/<sha>`) also returns null: it's a
+ * distinct page, not the PR, so it's never closed as a duplicate (matching the
+ * auto-pin exclusion).
  */
 function dedupKey(url: string): string | null {
-  if (parsePrUrl(url) === null) return null
-  let parsed: URL
-  try {
-    parsed = new URL(url)
-  } catch {
-    return null
-  }
-  const path = parsed.pathname.replace(/\/+$/, "") // drop trailing slash(es)
-  return `${parsed.hostname.toLowerCase()}${path}${parsed.search}`
+  const ref = parsePrUrl(url)
+  if (ref === null || isPrCommitUrl(url)) return null
+  return refKey(ref)
 }
 
 /**
- * Tab ids to close because another tab already shows the same PR page. Tabs are
- * grouped by {@link dedupKey}; in each group with more than one tab, one survivor
+ * Tab ids to close because another tab already shows the same PR — its page or
+ * any of its subtabs, which all count as the one PR ({@link dedupKey}). Tabs are
+ * grouped by that key; in each group with more than one tab, one survivor
  * is kept — a pinned tab wins over an unpinned one (the PR's auto-pin home), then
  * the lowest window index — and every other tab in the group is returned to close.
  *
