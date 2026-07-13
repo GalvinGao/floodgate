@@ -32,9 +32,14 @@ function lifecycleFromRegion(region: Element): TerminalState | null {
   const label = icon.getAttribute("aria-label")?.trim().toLowerCase()
   if (label === "merged") return "merged"
   if (label === "closed") return "closed"
-  // Fallback: the Octicon class, when GitHub drops the aria-label.
+  // Fallback: the Octicon class, when GitHub drops the aria-label — but ONLY for
+  // closed. There is deliberately NO `octicon-git-merge` → "merged" fallback: an
+  // open, *mergeable* PR renders the SAME `octicon-git-merge` glyph as a merged
+  // PR (only the color and aria-label differ), so inferring "merged" from the
+  // glyph false-positives every ready-to-merge open PR — the confirming fetch
+  // then flips it back, which reads as the favicon flashing purple on load. The
+  // closed glyph is unique to closed PRs, so it stays a safe label-less fallback.
   const cls = icon.getAttribute("class") ?? ""
-  if (/\bocticon-git-merge\b/.test(cls)) return "merged"
   if (/\bocticon-git-pull-request-closed\b/.test(cls)) return "closed"
   return null
 }

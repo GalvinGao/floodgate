@@ -40,11 +40,24 @@ const OPEN = `
     <svg aria-label="3 checks passed" class="octicon octicon-check"></svg>
   </div>`
 
-// Wrapper icon carries the octicon class but NO aria-label → exercises the fallback.
-const MERGED_BY_CLASS = `
+// An OPEN, mergeable PR renders the SAME git-merge glyph as a merged PR (only the
+// color + aria-label differ). With no "Merged" aria-label this must NOT be read as
+// merged — regression guard for the favicon flashing purple on every ready-to-merge
+// PR while the confirming fetch was still in flight.
+const OPEN_MERGEABLE_BY_CLASS = `
   <div data-testid="mergebox-partial">
     <div data-testid="mergeability-icon-wrapper">
       <svg class="octicon octicon-git-merge"></svg>
+    </div>
+    <h3>This branch has no conflicts with the base branch</h3>
+  </div>`
+
+// Closed PR whose icon dropped the aria-label → exercises the retained class
+// fallback (the closed glyph is unique to closed PRs, so it stays trustworthy).
+const CLOSED_BY_CLASS = `
+  <div data-testid="mergebox-partial">
+    <div data-testid="mergeability-icon-wrapper">
+      <svg class="octicon octicon-git-pull-request-closed"></svg>
     </div>
   </div>`
 
@@ -82,8 +95,13 @@ describe("detectTerminalState", () => {
     expect(detectTerminalState(root(CLOSED))).toBe("closed")
   })
 
-  it("reads merged from the octicon class when the aria-label is absent", () => {
-    expect(detectTerminalState(root(MERGED_BY_CLASS))).toBe("merged")
+  it("reads closed from the octicon class when the aria-label is absent", () => {
+    expect(detectTerminalState(root(CLOSED_BY_CLASS))).toBe("closed")
+  })
+
+  it("does NOT read merged from the git-merge glyph alone (open mergeable PR)", () => {
+    // The glyph is shared with a merged PR; only aria-label="Merged" is decisive.
+    expect(detectTerminalState(root(OPEN_MERGEABLE_BY_CLASS))).toBeNull()
   })
 
   it("returns null for an open PR", () => {
