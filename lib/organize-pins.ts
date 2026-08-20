@@ -1,4 +1,4 @@
-import { isPrCommitUrl, parsePrUrl, refKey, type PrRef } from "./github-pr"
+import { isStandalonePrUrl, parsePrUrl, refKey, type PrRef } from "./github-pr"
 
 /** chrome.tabs.Tab.groupId sentinel for an ungrouped tab (TAB_GROUP_ID_NONE). */
 export const TAB_GROUP_ID_NONE = -1
@@ -119,26 +119,23 @@ function sequenceMoves(
  */
 /**
  * The key two tabs must share to count as duplicate views of the same PR. Every
- * one of a PR's tabs collapses to a single key — the PR itself, its subtabs
- * (`/files`, `/commits`, `/checks`, `/changes`), and trailing-slash / hash /
- * query-string variants — so any extra copy is a duplicate. This mirrors the
- * open-time auto-pin dedup, which also keys by PR ref. Non-PR URLs return null.
- * A specific-commit diff (`…/pull/N/commits/<sha>`) also returns null: it's a
- * distinct page, not the PR, so it's never closed as a duplicate (matching the
- * auto-pin exclusion).
+ * ordinary subtab collapses to a single key with the PR itself. Files views and
+ * specific-commit diffs return null: they are standalone pages, so they are never
+ * closed as duplicates. This mirrors the open-time auto-pin dedup. Non-PR URLs
+ * also return null.
  */
 function dedupKey(url: string): string | null {
   const ref = parsePrUrl(url)
-  if (ref === null || isPrCommitUrl(url)) return null
+  if (ref === null || isStandalonePrUrl(url)) return null
   return refKey(ref)
 }
 
 /**
  * Tab ids to close because another tab already shows the same PR — its page or
- * any of its subtabs, which all count as the one PR ({@link dedupKey}). Tabs are
- * grouped by that key; in each group with more than one tab, one survivor
- * is kept — a pinned tab wins over an unpinned one (the PR's auto-pin home), then
- * the lowest window index — and every other tab in the group is returned to close.
+ * an ordinary subtab with the same {@link dedupKey}. Standalone views are skipped.
+ * In each group with more than one tab, one survivor is kept — a pinned tab wins
+ * over an unpinned one (the PR's auto-pin home), then the lowest window index —
+ * and every other tab in the group is returned to close.
  *
  * Dedup spans the whole window (a PR that's pinned *and* also open loose is a
  * duplicate), unlike the per-partition reorder; this matches the open-time

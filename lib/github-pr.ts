@@ -43,8 +43,8 @@ const PR_COMMIT_PATH =
  * Whether `url` points at a *specific commit* inside a PR (…/pull/N/commits/<sha>),
  * as opposed to the PR itself or its files/commits/checks subtabs. `parsePrUrl`
  * intentionally collapses every subtab onto the same ref, but a single-commit view
- * is a different thing from the PR — callers use this to exclude it from the
- * auto-pin dedup so it opens as its own tab instead of merging into the PR's tab.
+ * is a different thing from the PR. See {@link isStandalonePrUrl} for the views
+ * that must not merge into the PR's pinned tab.
  */
 export function isPrCommitUrl(url: string): boolean {
   let parsed: URL
@@ -55,4 +55,28 @@ export function isPrCommitUrl(url: string): boolean {
   }
   if (parsed.hostname !== "github.com") return false
   return PR_COMMIT_PATH.test(parsed.pathname)
+}
+
+// /{owner}/{repo}/pull/{number}/files, optionally followed by a commit. Hashes
+// such as #diff-... are not part of pathname, so they are covered automatically.
+const PR_FILES_PATH = /^\/[^/]+\/[^/]+\/pull\/\d+\/files(?:\/|$)/
+
+/** Whether `url` points at the PR's files view, including commit-scoped diffs. */
+export function isPrFilesUrl(url: string): boolean {
+  let parsed: URL
+  try {
+    parsed = new URL(url)
+  } catch {
+    return false
+  }
+  if (parsed.hostname !== "github.com") return false
+  return PR_FILES_PATH.test(parsed.pathname)
+}
+
+/**
+ * Whether a PR URL should remain a standalone tab instead of being auto-pinned
+ * or deduplicated into the PR's main pinned tab.
+ */
+export function isStandalonePrUrl(url: string): boolean {
+  return isPrCommitUrl(url) || isPrFilesUrl(url)
 }

@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest"
 
-import { isPrCommitUrl, parsePrUrl } from "./github-pr"
+import {
+  isPrCommitUrl,
+  isPrFilesUrl,
+  isStandalonePrUrl,
+  parsePrUrl
+} from "./github-pr"
 
 const SHA = "ead092bc8781c79bf01f7db2b641ddeef2b0a181"
 
@@ -76,6 +81,31 @@ describe("isPrCommitUrl", () => {
       "not a url"
     ]) {
       expect(isPrCommitUrl(url)).toBe(false)
+    }
+  })
+})
+
+describe("isPrFilesUrl", () => {
+  it("matches files views, including commit-scoped and anchored diffs", () => {
+    for (const url of [
+      "https://github.com/acme/api/pull/409/files",
+      "https://github.com/acme/api/pull/409/files/",
+      `https://github.com/acme/api/pull/409/files/${SHA}#diff-deadbeef`,
+      "https://github.com/acme/api/pull/409/files?diff=split"
+    ]) {
+      expect(isPrFilesUrl(url)).toBe(true)
+      expect(isStandalonePrUrl(url)).toBe(true)
+    }
+  })
+
+  it("does not match similarly named or non-GitHub paths", () => {
+    for (const url of [
+      "https://github.com/acme/api/pull/409/files-changed",
+      "https://github.com/acme/api/pull/409/checks",
+      "https://github.dev/acme/api/pull/409/files",
+      "not a url"
+    ]) {
+      expect(isPrFilesUrl(url)).toBe(false)
     }
   })
 })

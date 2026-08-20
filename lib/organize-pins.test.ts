@@ -187,14 +187,14 @@ describe("selectDuplicateTabs", () => {
     expect(selectDuplicateTabs(tabs)).toEqual([0, 1]) // pinned id 2 survives
   })
 
-  it("closes a subtab (/files, /changes, …) as a duplicate of the PR", () => {
+  it("keeps files views standalone while deduping ordinary subtabs", () => {
     const tabs = [
       tab(0, 0, pr("o/a", 5)),
       tab(1, 1, `${pr("o/a", 5)}/files`),
-      tab(2, 2, `${pr("o/a", 5)}/changes`)
+      tab(2, 2, `${pr("o/a", 5)}/files/abc1234#diff-deadbeef`),
+      tab(3, 3, `${pr("o/a", 5)}/changes`)
     ]
-    // all three are views of the one PR → keep the leftmost, close the subtabs
-    expect(selectDuplicateTabs(tabs)).toEqual([1, 2])
+    expect(selectDuplicateTabs(tabs)).toEqual([3])
   })
 
   it("collapses trailing-slash and hash variants of the same page", () => {
