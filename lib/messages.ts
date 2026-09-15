@@ -108,6 +108,18 @@ export type RemoveWatchedRepo = {
   owner: string
   repo: string
 }
+/**
+ * Options → background: flip one watched repo between every author and only
+ * yours. Separate from `addWatchedRepo` because it re-baselines the watermark,
+ * which needs a fetch and can therefore fail — so it answers, and the Options
+ * checkbox stays where it was until the background confirms.
+ */
+export type SetWatchedRepoScope = {
+  type: "setWatchedRepoScope"
+  owner: string
+  repo: string
+  onlyMine: boolean
+}
 
 export type FaviconRequest =
   | RegisterPr
@@ -118,6 +130,7 @@ export type FaviconRequest =
   | TokenCleared
   | AddWatchedRepo
   | RemoveWatchedRepo
+  | SetWatchedRepoScope
 
 export type RegisterPrResponse =
   | { hasToken: false }
@@ -135,6 +148,18 @@ export type AddWatchedRepoResponse =
         | "no-access"
         | "network"
         | "rate-limit"
+    }
+
+/**
+ * Response to `setWatchedRepoScope` — the add's failure vocabulary minus the
+ * cases only an add can hit (a malformed name, an already-watched repo), plus
+ * `not-watched` for a repo removed between render and click.
+ */
+export type SetWatchedRepoScopeResponse =
+  | { ok: true }
+  | {
+      ok: false
+      error: "not-watched" | "no-token" | "no-access" | "network" | "rate-limit"
     }
 
 /**

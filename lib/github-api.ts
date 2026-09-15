@@ -171,7 +171,7 @@ const LIST_OPEN_PRS_QUERY = `
 query($owner:String!,$repo:String!){
   repository(owner:$owner,name:$repo){
     pullRequests(states:OPEN, first:30, orderBy:{field:CREATED_AT,direction:DESC}){
-      nodes{ number isDraft title author{ login } }
+      nodes{ number isDraft title viewerDidAuthor author{ login } }
     }
   }
 }`
@@ -184,6 +184,7 @@ interface ListPrsData {
             number?: number
             isDraft?: boolean
             title?: string
+            viewerDidAuthor?: boolean
             author?: { login?: string } | null
           } | null)[]
         | null
@@ -201,6 +202,11 @@ export interface FetchOpenPrsResult {
  * List a repo's open PRs (newest 30). Errors are typed, never thrown — mirrors
  * `fetchPrStatus`. A null `repository` (no access, or a typo'd owner/repo) maps
  * to `"notfound"` so callers can distinguish it from an auth or transient failure.
+ *
+ * Each PR carries `viewerDidAuthor`, GitHub's own answer to "did this token's
+ * user open it", which is what a watch set to only-mine filters on. It rides
+ * along on this one query: no search endpoint, no second request, and no stored
+ * login to go stale when the token is swapped for another account's.
  */
 export async function fetchOpenPrs(
   fetchFn: FetchFn,
@@ -236,7 +242,8 @@ export async function fetchOpenPrs(
       number: n.number,
       authorLogin: n.author?.login ?? "",
       isDraft: !!n.isDraft,
-      title: n.title ?? ""
+      title: n.title ?? "",
+      viewerDidAuthor: !!n.viewerDidAuthor
     })
   }
   return { ok: true, prs }

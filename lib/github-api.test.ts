@@ -195,12 +195,14 @@ describe("fetchOpenPrs", () => {
                 number: 12,
                 isDraft: false,
                 title: "Feat",
+                viewerDidAuthor: true,
                 author: { login: "octocat" }
               },
               {
                 number: 11,
                 isDraft: true,
                 title: "WIP",
+                viewerDidAuthor: false,
                 author: { login: "renovate[bot]" }
               }
             ]
@@ -211,12 +213,19 @@ describe("fetchOpenPrs", () => {
     expect(await fetchOpenPrs(mockFetch({ body }), "t", ref)).toEqual({
       ok: true,
       prs: [
-        { number: 12, authorLogin: "octocat", isDraft: false, title: "Feat" },
+        {
+          number: 12,
+          authorLogin: "octocat",
+          isDraft: false,
+          title: "Feat",
+          viewerDidAuthor: true
+        },
         {
           number: 11,
           authorLogin: "renovate[bot]",
           isDraft: true,
-          title: "WIP"
+          title: "WIP",
+          viewerDidAuthor: false
         }
       ]
     })
@@ -232,12 +241,35 @@ describe("fetchOpenPrs", () => {
     }
     expect(
       (await fetchOpenPrs(mockFetch({ body: nullAuthor }), "t", ref)).prs
-    ).toEqual([{ number: 5, authorLogin: "", isDraft: false, title: "x" }])
+    ).toEqual([
+      {
+        number: 5,
+        authorLogin: "",
+        isDraft: false,
+        title: "x",
+        viewerDidAuthor: false
+      }
+    ])
     const empty = { data: { repository: { pullRequests: { nodes: [] } } } }
     expect(await fetchOpenPrs(mockFetch({ body: empty }), "t", ref)).toEqual({
       ok: true,
       prs: []
     })
+  })
+
+  it("asks for viewerDidAuthor, so only-mine watches have something to filter on", async () => {
+    let sent: string | undefined
+    const f = vi.fn(async (_url: string, init: RequestInit) => {
+      sent = init.body as string
+      return {
+        ok: true,
+        status: 200,
+        headers: { get: () => null },
+        json: async () => ({ data: { repository: { pullRequests: {} } } })
+      } as unknown as Response
+    })
+    await fetchOpenPrs(f as unknown as typeof fetch, "t", ref)
+    expect(JSON.parse(sent ?? "{}").query).toContain("viewerDidAuthor")
   })
 
   it("null repository (no access / typo) → notfound", async () => {

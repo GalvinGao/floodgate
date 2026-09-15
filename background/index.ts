@@ -18,7 +18,8 @@ import type {
   FaviconRequest,
   PopupRequest,
   ReconcileTabsResponse,
-  RegisterPrResponse
+  RegisterPrResponse,
+  SetWatchedRepoScopeResponse
 } from "~lib/messages"
 import {
   planPinOrganization,
@@ -41,6 +42,7 @@ import { openAndGroup, type TabGroupApi } from "~lib/tab-group"
 import { onPoll, onRegister, onVisibilityChange } from "~lib/unread"
 import {
   highestNumber,
+  isOnlyMine,
   LAST_FETCHED_KEY,
   parseOwnerRepo,
   repoKey,
@@ -717,6 +719,12 @@ chrome.runtime.onMessage.addListener(
             .catch(() => sendResponse({ ok: false, error: "network" }))
           return true // async response
         })
+        .with({ type: "setWatchedRepoScope" }, (m) => {
+          handleSetWatchedRepoScope(m.owner, m.repo, m.onlyMine)
+            .then(sendResponse)
+            .catch(() => sendResponse({ ok: false, error: "network" }))
+          return true // async response
+        })
         .with({ type: "visibility" }, (m) => {
           if (tabId != null) handleVisibility(tabId, m.visible)
           return false
@@ -812,13 +820,64 @@ async function handleAddWatchedRepo(
     owner: parsed.owner,
     repo: parsed.repo,
     watermark: highestNumber(result.prs),
-    handled: []
+    handled: [],
+    // A new watch starts narrowed: the flood is the pain this feature exists
+    // for, so watching every author is the thing you opt into (untick "only
+    // mine" on the row), not the thing you have to notice and opt out of.
+    // Repos already on the list keep whatever they have — an absent value still
+    // means every author, so there is nothing to migrate.
+    onlyMine: true
   })
   persistWatched()
   // The add-time list query above IS a fetch — stamp it so Options shows
   // "Last fetched just now" immediately, instead of waiting for the first tick.
   void chrome.storage.session.set({ [LAST_FETCHED_KEY]: Date.now() })
   await reconcilePollAlarm()
+  return { ok: true }
+}
+
+/**
+ * Flip one watched repo between every author and only yours, re-baselining the
+ * watermark to the repo's current highest open PR.
+ *
+ * The re-baseline is the point. While a watch is only-mine, everyone else's new
+ * PRs are passed over *without* being marked handled — so turning the filter off
+ * against the original add-time watermark would treat every PR opened in the
+ * meantime as brand new and open them all. Re-baselining makes a scope change
+ * read the same way adding the repo does: from here on, new PRs open. Handled
+ * numbers at or below the new watermark are dropped in the same breath — the
+ * watermark already excludes them, so keeping them only grows storage.
+ *
+ * That baseline needs the current PR list, so this can fail; on failure nothing
+ * changes and the Options checkbox stays where it was.
+ */
+async function handleSetWatchedRepoScope(
+  owner: string,
+  repo: string,
+  onlyMine: boolean
+): Promise<SetWatchedRepoScopeResponse> {
+  await watchedReady
+  const entry = watchedRepos.get(repoKey(owner, repo))
+  if (!entry) return { ok: false, error: "not-watched" }
+  if (isOnlyMine(entry.onlyMine) === onlyMine) return { ok: true }
+  const token = await getToken()
+  if (!token) return { ok: false, error: "no-token" }
+  const result = await fetchOpenPrs(fetch, token, entry)
+  if (!result.ok || !result.prs) {
+    const e = result.error
+    return {
+      ok: false,
+      error: e === "network" || e === "rate-limit" ? e : "no-access"
+    }
+  }
+  entry.watermark = highestNumber(result.prs)
+  entry.handled = entry.handled.filter((n) => n > entry.watermark)
+  if (onlyMine) entry.onlyMine = true
+  else delete entry.onlyMine
+  persistWatched()
+  // Like the add path, the list query above IS a fetch — stamp it so Options'
+  // freshness line doesn't read stale right after a scope change.
+  void chrome.storage.session.set({ [LAST_FETCHED_KEY]: Date.now() })
   return { ok: true }
 }
 
@@ -948,7 +1007,8 @@ async function pollWatchedRepos(token: string): Promise<void> {
       prs: result.prs,
       watermark: entry.watermark,
       handled: entry.handled,
-      cap: remaining
+      cap: remaining,
+      onlyMine: isOnlyMine(entry.onlyMine)
     })
     for (const pr of toOpen) {
       const key = refKey({
@@ -1031,7 +1091,10 @@ async function handleReconcileTabs(
       prs: result.prs,
       watermark: 0,
       handled: [],
-      cap: result.prs.length
+      cap: result.prs.length,
+      // The one eligibility rule reconcile keeps: a repo watched for your PRs
+      // only catches up on your PRs, or the button would undo the setting.
+      onlyMine: isOnlyMine(entry.onlyMine)
     })
     const handled = new Set(entry.handled)
     for (const pr of toOpen) {
